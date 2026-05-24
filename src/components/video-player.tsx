@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react"
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+} from "react"
 import { Maximize, Minimize, Pause, Play, Volume2, VolumeX } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -11,7 +17,17 @@ function formatTime(seconds: number) {
   return `${minutes}:${String(rounded % 60).padStart(2, "0")}`
 }
 
-export function VideoPlayer({ src, poster, label, className }: { src: string; poster?: string; label: string; className?: string }) {
+export function VideoPlayer({
+  src,
+  poster,
+  label,
+  className,
+}: {
+  src: string
+  poster?: string
+  label: string
+  className?: string
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const hideControlsRef = useRef<number | undefined>(undefined)
@@ -34,12 +50,16 @@ export function VideoPlayer({ src, poster, label, className }: { src: string; po
     stopHideTimer()
     setControlsVisible(true)
     if (hideAfterDelay) {
-      hideControlsRef.current = window.setTimeout(() => setControlsVisible(false), 1900)
+      hideControlsRef.current = window.setTimeout(
+        () => setControlsVisible(false),
+        1900
+      )
     }
   }
 
   useEffect(() => {
-    const handleFullscreenChange = () => setFullscreen(document.fullscreenElement === containerRef.current)
+    const handleFullscreenChange = () =>
+      setFullscreen(document.fullscreenElement === containerRef.current)
     document.addEventListener("fullscreenchange", handleFullscreenChange)
     return () => {
       document.removeEventListener("fullscreenchange", handleFullscreenChange)
@@ -110,7 +130,13 @@ export function VideoPlayer({ src, poster, label, className }: { src: string; po
       event.preventDefault()
       const video = videoRef.current
       if (!video) return
-      video.currentTime = Math.max(0, Math.min(duration, video.currentTime + (event.key === "ArrowRight" ? 5 : -5)))
+      video.currentTime = Math.max(
+        0,
+        Math.min(
+          duration,
+          video.currentTime + (event.key === "ArrowRight" ? 5 : -5)
+        )
+      )
       showControls()
     }
   }
@@ -124,7 +150,10 @@ export function VideoPlayer({ src, poster, label, className }: { src: string; po
       tabIndex={0}
       role="region"
       aria-label={label}
-      className={cn("group/video relative size-full overflow-hidden bg-black outline-none focus-visible:ring-2 focus-visible:ring-white/45", className)}
+      className={cn(
+        "group/video relative size-full overflow-hidden bg-black outline-none focus-visible:ring-2 focus-visible:ring-white/45",
+        className
+      )}
       onMouseMove={() => showControls()}
       onMouseLeave={() => playing && setControlsVisible(false)}
       onFocus={() => showControls(false)}
@@ -140,7 +169,9 @@ export function VideoPlayer({ src, poster, label, className }: { src: string; po
         onClick={() => void togglePlayback()}
         onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)}
         onDurationChange={(event) => setDuration(event.currentTarget.duration)}
-        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+        onTimeUpdate={(event) =>
+          setCurrentTime(event.currentTarget.currentTime)
+        }
         onVolumeChange={(event) => {
           setVolume(event.currentTarget.volume)
           setMuted(event.currentTarget.muted)
@@ -161,14 +192,22 @@ export function VideoPlayer({ src, poster, label, className }: { src: string; po
       <button
         type="button"
         aria-label="Play video"
-        className={cn("absolute inset-0 flex items-center justify-center transition-opacity duration-200", playing ? "pointer-events-none opacity-0" : "opacity-100")}
+        className={cn(
+          "absolute inset-0 flex items-center justify-center transition-opacity duration-200",
+          playing ? "pointer-events-none opacity-0" : "opacity-100"
+        )}
         onClick={() => void togglePlayback()}
       >
         <span className="flex size-14 items-center justify-center rounded-full border border-white/15 bg-black/45 text-white shadow-xl backdrop-blur-sm transition-transform hover:scale-105">
           <Play className="ml-0.5 size-6 fill-white" />
         </span>
       </button>
-      <div className={cn("pointer-events-none absolute inset-x-0 bottom-0 flex flex-col justify-end bg-linear-to-t from-black/75 via-black/25 to-transparent px-3 pt-14 pb-3 text-white transition-opacity duration-200", controlsVisible || !playing ? "opacity-100" : "opacity-0")}>
+      <div
+        className={cn(
+          "pointer-events-none absolute inset-x-0 bottom-0 flex flex-col justify-end bg-linear-to-t from-black/75 via-black/25 to-transparent px-3 pt-14 pb-3 text-white transition-opacity duration-200",
+          controlsVisible || !playing ? "opacity-100" : "opacity-0"
+        )}
+      >
         <input
           type="range"
           min={0}
@@ -181,12 +220,32 @@ export function VideoPlayer({ src, poster, label, className }: { src: string; po
           onChange={(event) => seek(event.target.value)}
         />
         <div className="flex items-center gap-1">
-          <Button type="button" variant="ghost" size="icon-sm" aria-label={playing ? "Pause video" : "Play video"} className="pointer-events-auto text-white hover:bg-white/15 hover:text-white" onClick={() => void togglePlayback()}>
-            {playing ? <Pause className="fill-white" /> : <Play className="fill-white" />}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={playing ? "Pause video" : "Play video"}
+            className="pointer-events-auto text-white hover:bg-white/15 hover:text-white"
+            onClick={() => void togglePlayback()}
+          >
+            {playing ? (
+              <Pause className="fill-white" />
+            ) : (
+              <Play className="fill-white" />
+            )}
           </Button>
-          <span className="ml-1 text-[11px] font-medium text-white/85 tabular-nums">{formatTime(currentTime)} / {formatTime(duration)}</span>
+          <span className="ml-1 text-[11px] font-medium text-white/85 tabular-nums">
+            {formatTime(currentTime)} / {formatTime(duration)}
+          </span>
           <div className="ml-auto flex items-center gap-0.5">
-            <Button type="button" variant="ghost" size="icon-sm" aria-label={muted ? "Unmute" : "Mute"} className="pointer-events-auto text-white hover:bg-white/15 hover:text-white" onClick={toggleMute}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={muted ? "Unmute" : "Mute"}
+              className="pointer-events-auto text-white hover:bg-white/15 hover:text-white"
+              onClick={toggleMute}
+            >
               {muted || volume === 0 ? <VolumeX /> : <Volume2 />}
             </Button>
             <input
@@ -200,7 +259,14 @@ export function VideoPlayer({ src, poster, label, className }: { src: string; po
               style={{ "--video-progress": `${volumeFill}%` } as CSSProperties}
               onChange={(event) => updateVolume(event.target.value)}
             />
-            <Button type="button" variant="ghost" size="icon-sm" aria-label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"} className="pointer-events-auto ml-1 text-white hover:bg-white/15 hover:text-white" onClick={() => void toggleFullscreen()}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+              className="pointer-events-auto ml-1 text-white hover:bg-white/15 hover:text-white"
+              onClick={() => void toggleFullscreen()}
+            >
               {fullscreen ? <Minimize /> : <Maximize />}
             </Button>
           </div>

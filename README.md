@@ -9,7 +9,7 @@ Image-generation workspace built with React, Vite, shadcn/ui, and a Cloudflare W
 - Metadata: Cloudflare D1, with local SQLite-compatible state through Wrangler.
 - Media: private Cloudflare R2 bucket.
 - Image normalization and preview variants: Cloudflare Images binding.
-- Generation: Replicate image models `openai/gpt-image-2` and `xai/grok-imagine-image-quality`, Replicate `xai/grok-imagine-video`, and WaveSpeed `bytedance/seedance-2.0/image-to-video-turbo`.
+- Generation: WaveSpeed `openai/gpt-image-2` and `bytedance/seedance-2.0/image-to-video-turbo`; Replicate `xai/grok-imagine-image-quality` and `xai/grok-imagine-video`.
 - Conversation titles: OpenCode Zen `claude-haiku-4-5` through the Anthropic AI SDK provider.
 
 ## Local Setup
@@ -48,27 +48,35 @@ npm run dev
 
 ## Configuration Before Deploying
 
-`wrangler.jsonc` contains placeholder local configuration. Before deploying, create the remote resources and replace the placeholder D1 database ID:
+`wrangler.jsonc` targets the isolated `creator-generator-app-prod` Worker. Wrangler automatically provisions dedicated D1 and R2 resources for its draft `DB` and `MEDIA` bindings on first deployment.
+
+For first deployment, deploy once to provision the Worker resources, then apply its D1 migrations:
 
 ```bash
-npx wrangler d1 create creator-db
-npx wrangler r2 bucket create creator-media
+bun run deploy
+npm run db:migrate:remote
 ```
 
-Set server-side secrets remotely:
+After that Worker exists, configure its remote server-side secrets:
 
 ```bash
-npx wrangler secret put REPLICATE_API_TOKEN
-npx wrangler secret put WAVESPEED_API_KEY
-npx wrangler secret put OPENCODE_ZEN_API_KEY
-npx wrangler secret put REPLICATE_WEBHOOK_SIGNING_SECRET
+bun run secrets:push --dry-run
+bun run secrets:push
 ```
 
-Configure `PUBLIC_APP_URL` to the deployed HTTPS application URL, apply migrations remotely, and deploy:
+The upload script reads the known application values from local `.env` or process environment, refuses to upload without required provider keys, and explicitly targets `creator-generator-app-prod`. It uploads `REPLICATE_API_TOKEN`, `WAVESPEED_API_KEY`, and `OPENCODE_ZEN_API_KEY`; it also includes `REPLICATE_WEBHOOK_SIGNING_SECRET` when set. No other local environment variables are uploaded.
+
+Set `PUBLIC_APP_URL` separately after choosing the deployed HTTPS URL; do not upload the local `http://localhost:5173` development value:
+
+```bash
+npx wrangler secret put PUBLIC_APP_URL --name creator-generator-app-prod
+```
+
+For later application deployments, apply new remote migrations before publishing code that uses them:
 
 ```bash
 npm run db:migrate:remote
-npm run deploy
+bun run deploy
 ```
 
 The deployed application should be protected by Cloudflare Access before paid generation endpoints are exposed.
@@ -116,8 +124,8 @@ Generation multipart fields:
 prompt          required string
 mode            image | video; defaults to image
 model           openai/gpt-image-2 | xai/grok-imagine-image-quality; defaults to GPT Image 2
-aspectRatio     1:1 | 3:2 | 2:3
-quality         low | medium | high; GPT Image 2 only
+aspectRatio     1:1 | 3:2 | 2:3 | 16:9
+quality         low | medium | high; GPT Image 2 only, mapped to 1k | 2k | 4k respectively
 resolution      1k | 2k; Grok Imagine Quality only, defaults to 2k
 personIds       repeatable; maximum four
 attachments     repeatable image file; maximum two
@@ -127,11 +135,25 @@ parentTurnId    include for modifications
 
 Initial generations accept at most six image references: four People and two prompt attachments. Modifications also include the immediately previous generated image as the edit base, for at most seven reference images. Only People tagged in the current modification are submitted again.
 
-`xai/grok-imagine-image-quality` supports a text-only new generation or one uploaded reference image on the initial generation. After a Grok output exists, follow-up prompts use that previous output as Grok's single edit image and cannot add more reference images or People. Existing GPT Image 2 multi-reference and modification behavior remains unchanged.
+New `openai/gpt-image-2` turns run through WaveSpeed: prompts with no input images use `openai/gpt-image-2/text-to-image`, while turns with People, uploaded references, or a prior output use `openai/gpt-image-2/edit`. Its single visible quality tier also fixes WaveSpeed output resolution: `low` uses `1k`, `medium` uses `2k`, and `high` uses `4k`. Existing Replicate-backed GPT turns preserve their original provider for reruns and prompt revisions. `xai/grok-imagine-image-quality` supports a text-only new generation or one uploaded reference image on the initial generation. After a Grok output exists, follow-up prompts use that previous output as Grok's single edit image and cannot add more reference images or People.
 
 Video mode is available from a completed focused still image and creates a derivative video output without replacing the still-image edit branch. Seedance uses WaveSpeed model `bytedance/seedance-2.0/image-to-video-turbo` with `videoResolution: 720p | 1080p`; Grok video stays on Replicate as `xai/grok-imagine-video` with `videoResolution: 480p | 720p`. Both accept a duration and video-compatible aspect ratio. Seedance accepts `generateAudio`; Grok video includes native synchronized audio without an exposed off switch. Video outputs are persisted as private MP4 assets in R2 and served directly rather than through image transformations.
 
-The API enforces one active generation per conversation. Successful output PNG masters are imported from Replicate into private R2 storage immediately after completion.
+The API enforces one active generation per conversation. Successful output PNG masters are imported from the generation provider into private R2 storage immediately after completion.
+
+### Provider Benchmark
+
+Run a paid, sequential generation baseline using local `WAVESPEED_API_KEY` and `REPLICATE_API_TOKEN` values:
+
+```bash
+bun run benchmark
+```
+
+The benchmark runs three text-only WaveSpeed GPT Image 2 generations and three text-only Replicate Grok Image Quality generations using matched prompts. It then creates one WaveSpeed Seedance Turbo video from each GPT output and one Replicate Grok video from each Grok output. Jobs run one at a time so recorded durations are straightforward to compare.
+
+Benchmark settings are intentionally fixed in `scripts/benchmark.ts`: GPT uses the app's `Medium` tier (`2k`) at `16:9`, Grok images use `2k` at `16:9`, and generated videos use `720p`, `16:9`, and a 5-second duration. Results and provider output URLs are written to ignored timestamped JSON and Markdown files under `benchmark-results/`.
+
+The active generation UI uses the initial benchmark averages plus a 30-second completion buffer as an explicitly labeled estimated progress percentage for these model/provider paths. Estimated progress advances by elapsed time, caps at `99%` until a provider reports completion, and changes to `100%` while the output is being persisted. It is not provider-reported generation progress.
 
 ### Forks
 
@@ -164,7 +186,7 @@ Gallery contains every successful generated output. Permanent Gallery deletion i
 POST /api/webhooks/replicate?turnId=:turnId
 ```
 
-Production Replicate generations provide Replicate with a completion webhook URL only when `PUBLIC_APP_URL` is HTTPS. Deliveries are signature-validated, idempotent, and used to persist completed outputs even when no browser SSE connection remains active. WaveSpeed Seedance Turbo is currently reconciled through the application's SSE polling path because WaveSpeed's public webhook documentation does not specify signature verification; keep the generating browser session connected until that task is imported into R2.
+Production Replicate generations provide Replicate with a completion webhook URL only when `PUBLIC_APP_URL` is HTTPS. Deliveries are signature-validated, idempotent, and used to persist completed outputs even when no browser SSE connection remains active. WaveSpeed-backed GPT Image 2 and Seedance Turbo turns are currently reconciled through the application's SSE polling path because WaveSpeed's public webhook documentation does not specify signature verification; keep the generating browser session connected until those tasks are imported into R2.
 
 ## Scripts
 
@@ -174,6 +196,8 @@ npm run build               # Typecheck and Cloudflare/Vite production build
 npm run typecheck           # Frontend and Worker TypeScript validation
 npm run lint                # ESLint validation
 npm run db:migrate:local    # Apply D1 migrations locally
-npm run db:migrate:remote   # Apply D1 migrations remotely
-npm run deploy              # Build and deploy Worker application
+npm run db:migrate:remote   # Apply D1 migrations to the deployed DB binding
+bun run deploy              # Build and deploy Worker application to Cloudflare
+bun run benchmark           # Run paid sequential provider timing benchmark
+bun run secrets:push        # Upload filtered application secrets to production Worker
 ```

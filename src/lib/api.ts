@@ -7,7 +7,10 @@ export type Person = {
 }
 
 export type ImageModel = "openai/gpt-image-2" | "xai/grok-imagine-image-quality"
-export type VideoModel = "bytedance/seedance-2.0" | "bytedance/seedance-2.0/image-to-video-turbo" | "xai/grok-imagine-video"
+export type VideoModel =
+  | "bytedance/seedance-2.0"
+  | "bytedance/seedance-2.0/image-to-video-turbo"
+  | "xai/grok-imagine-video"
 export type GenerationModel = ImageModel | VideoModel
 export type GenerationMode = "image" | "video"
 export type GenerationProvider = "replicate" | "wavespeed"
@@ -27,7 +30,12 @@ export type TurnInput = {
   role: "edit_base" | "person_reference" | "attached_reference"
   ordinal: number
   src: string | null
-  person: { id: string; name: string; handle: string; colorToken: string } | null
+  person: {
+    id: string
+    name: string
+    handle: string
+    colorToken: string
+  } | null
 }
 
 export type Turn = {
@@ -41,11 +49,18 @@ export type Turn = {
   mode: GenerationMode
   aspectRatio: string
   quality: "low" | "medium" | "high" | null
-  resolution: "1k" | "2k" | null
+  resolution: "1k" | "2k" | "4k" | null
   videoResolution: "480p" | "720p" | "1080p" | null
   duration: number | null
   generateAudio: boolean | null
-  status: "queued" | "starting" | "processing" | "persisting" | "succeeded" | "failed" | "canceled"
+  status:
+    | "queued"
+    | "starting"
+    | "processing"
+    | "persisting"
+    | "succeeded"
+    | "failed"
+    | "canceled"
   outputAssetId: string | null
   previewSrc: string | null
   downloadSrc: string | null
@@ -117,8 +132,12 @@ export class RequestError extends Error {
 async function request<T>(path: string, init?: RequestInit) {
   const response = await fetch(path, init)
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({})) as ApiErrorPayload
-    throw new RequestError(payload.error?.code ?? "REQUEST_FAILED", payload.error?.message ?? "Request failed.", response.status)
+    const payload = (await response.json().catch(() => ({}))) as ApiErrorPayload
+    throw new RequestError(
+      payload.error?.code ?? "REQUEST_FAILED",
+      payload.error?.message ?? "Request failed.",
+      response.status
+    )
   }
   if (response.status === 204) {
     return undefined as T
@@ -171,11 +190,24 @@ type ServerTurn = {
 }
 
 function person(value: ServerPerson): Person {
-  return { id: value.id, name: value.name, handle: value.handle, colorToken: value.color_token, imageSrc: value.imageSrc }
+  return {
+    id: value.id,
+    name: value.name,
+    handle: value.handle,
+    colorToken: value.color_token,
+    imageSrc: value.imageSrc,
+  }
 }
 
 function conversationSummary(value: ServerConversation): ConversationSummary {
-  return { id: value.id, title: value.title, titleStatus: value.title_status, previewSrc: value.previewSrc ?? null, createdAt: value.created_at, updatedAt: value.updated_at }
+  return {
+    id: value.id,
+    title: value.title,
+    titleStatus: value.title_status,
+    previewSrc: value.previewSrc ?? null,
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+  }
 }
 
 export function turn(value: ServerTurn): Turn {
@@ -193,7 +225,8 @@ export function turn(value: ServerTurn): Turn {
     resolution: value.resolution,
     videoResolution: value.video_resolution,
     duration: value.video_duration,
-    generateAudio: value.generate_audio === null ? null : Boolean(value.generate_audio),
+    generateAudio:
+      value.generate_audio === null ? null : Boolean(value.generate_audio),
     status: value.status,
     outputAssetId: value.output_asset_id,
     previewSrc: value.previewSrc,
@@ -213,18 +246,39 @@ export async function listPeople() {
 }
 
 export async function addPerson(formData: FormData) {
-  const data = await request<{ person: ServerPerson }>("/api/people", { method: "POST", body: formData })
+  const data = await request<{ person: ServerPerson }>("/api/people", {
+    method: "POST",
+    body: formData,
+  })
   return person(data.person)
 }
 
+export async function deletePerson(personId: string) {
+  return request<void>(`/api/people/${personId}`, { method: "DELETE" })
+}
+
 export async function listConversations() {
-  const data = await request<{ conversations: ServerConversation[] }>("/api/conversations")
+  const data = await request<{ conversations: ServerConversation[] }>(
+    "/api/conversations"
+  )
   return data.conversations.map(conversationSummary)
 }
 
 export async function getConversation(id: string) {
-  const data = await request<{ conversation: ServerConversation; turns: ServerTurn[] }>(`/api/conversations/${id}`)
-  return { ...conversationSummary(data.conversation), turns: data.turns.map(turn) }
+  const data = await request<{
+    conversation: ServerConversation
+    turns: ServerTurn[]
+  }>(`/api/conversations/${id}`)
+  return {
+    ...conversationSummary(data.conversation),
+    turns: data.turns.map(turn),
+  }
+}
+
+export async function deleteConversation(conversationId: string) {
+  return request<void>(`/api/conversations/${conversationId}`, {
+    method: "DELETE",
+  })
 }
 
 export async function createGeneration(draft: GenerationDraft) {
@@ -236,7 +290,8 @@ export async function createGeneration(draft: GenerationDraft) {
   if (draft.mode === "video") {
     body.set("videoResolution", draft.videoResolution ?? "720p")
     body.set("duration", String(draft.duration ?? 5))
-    if (draft.model === "bytedance/seedance-2.0/image-to-video-turbo") body.set("generateAudio", String(draft.generateAudio !== false))
+    if (draft.model === "bytedance/seedance-2.0/image-to-video-turbo")
+      body.set("generateAudio", String(draft.generateAudio !== false))
   } else if (draft.model === "openai/gpt-image-2") {
     body.set("quality", draft.quality ?? "medium")
   } else {
@@ -248,36 +303,67 @@ export async function createGeneration(draft: GenerationDraft) {
     body.set("conversationId", draft.conversationId)
     body.set("parentTurnId", draft.parentTurnId)
   }
-  const data = await request<{ conversation: ServerConversation; turn: ServerTurn }>("/api/generations", { method: "POST", body })
-  return { conversation: conversationSummary(data.conversation), turn: turn(data.turn) }
+  const data = await request<{
+    conversation: ServerConversation
+    turn: ServerTurn
+  }>("/api/generations", { method: "POST", body })
+  return {
+    conversation: conversationSummary(data.conversation),
+    turn: turn(data.turn),
+  }
 }
 
 export async function cancelGeneration(turnId: string) {
-  const data = await request<{ turn: ServerTurn }>(`/api/generations/${turnId}/cancel`, { method: "POST" })
+  const data = await request<{ turn: ServerTurn }>(
+    `/api/generations/${turnId}/cancel`,
+    { method: "POST" }
+  )
   return turn(data.turn)
 }
 
-export async function regenerateGeneration(turnId: string, conversationId: string) {
-  const data = await request<{ turn: ServerTurn }>(`/api/generations/${turnId}/regenerate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conversationId }),
-  })
+export async function regenerateGeneration(
+  turnId: string,
+  conversationId: string
+) {
+  const data = await request<{ turn: ServerTurn }>(
+    `/api/generations/${turnId}/regenerate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversationId }),
+    }
+  )
   return turn(data.turn)
 }
 
-export async function reviseTurn(turnId: string, conversationId: string, prompt: string) {
-  const data = await request<{ conversation: ServerConversation; turn: ServerTurn }>(`/api/turns/${turnId}/revise`, {
+export async function reviseTurn(
+  turnId: string,
+  conversationId: string,
+  prompt: string
+) {
+  const data = await request<{
+    conversation: ServerConversation
+    turn: ServerTurn
+  }>(`/api/turns/${turnId}/revise`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ conversationId, prompt }),
   })
-  return { conversation: conversationSummary(data.conversation), turn: turn(data.turn) }
+  return {
+    conversation: conversationSummary(data.conversation),
+    turn: turn(data.turn),
+  }
 }
 
 export async function forkTurn(turnId: string) {
-  const data = await request<{ conversation: ServerConversation; focusedTurn: ServerTurn }>(`/api/turns/${turnId}/fork`, { method: "POST" })
-  return { conversation: conversationSummary(data.conversation), focusedTurn: turn(data.focusedTurn) }
+  const data = await request<{
+    conversation: ServerConversation
+    focusedTurn: ServerTurn
+  }>(`/api/turns/${turnId}/fork`, { method: "POST" })
+  return {
+    conversation: conversationSummary(data.conversation),
+    focusedTurn: turn(data.focusedTurn),
+  }
 }
 
 export async function listGallery() {

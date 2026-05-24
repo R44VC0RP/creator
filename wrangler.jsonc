@@ -1,26 +1,30 @@
 {
-  "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "creator-opencode-ai",
-  "compatibility_date": "2026-05-23",
-  "main": "./worker/index.ts",
-  "assets": {
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
-  },
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "creator-db",
-      "database_id": "00000000-0000-0000-0000-000000000000"
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "MEDIA",
-      "bucket_name": "creator-media"
-    }
-  ],
-  "images": {
-    "binding": "IMAGES"
-  }
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "creator-generator-app-prod",
+	"compatibility_date": "2026-05-23",
+	"main": "./worker/index.ts",
+	"assets": {
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": [
+			"/api/*",
+			"/c/*",
+			"/share/c/*"
+		]
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_id": "641d95f8-802d-4a64-b2e8-ca8e44d356a3"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "MEDIA",
+			"bucket_name": "creator-generator-app-prod-media"
+		}
+	],
+	"images": {
+		"binding": "IMAGES"
+	}
 }

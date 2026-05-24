@@ -12,7 +12,11 @@ function model(env: Env) {
   return provider("claude-haiku-4-5")
 }
 
-export async function generateConversationTitle(env: Env, conversationId: string, context: string) {
+export async function generateConversationTitle(
+  env: Env,
+  conversationId: string,
+  context: string
+) {
   if (!env.OPENCODE_ZEN_API_KEY) {
     await failTitle(env, conversationId)
     return
@@ -29,12 +33,18 @@ export async function generateConversationTitle(env: Env, conversationId: string
         `Prompt context: ${context.slice(0, 1200)}`,
       ].join("\n"),
     })
-    const title = result.text.trim().replace(/^["']|["']$/g, "").replace(/[.!?]+$/, "").slice(0, 80)
+    const title = result.text
+      .trim()
+      .replace(/^["']|["']$/g, "")
+      .replace(/[.!?]+$/, "")
+      .slice(0, 80)
     if (!title) {
       await failTitle(env, conversationId)
       return
     }
-    await env.DB.prepare("UPDATE conversations SET title = ?, title_status = 'generated', updated_at = ? WHERE id = ? AND title_status = 'generating'")
+    await env.DB.prepare(
+      "UPDATE conversations SET title = ?, title_status = 'generated', updated_at = ? WHERE id = ? AND title_status = 'generating'"
+    )
       .bind(title, now(), conversationId)
       .run()
   } catch (error) {
@@ -44,7 +54,9 @@ export async function generateConversationTitle(env: Env, conversationId: string
 }
 
 async function failTitle(env: Env, conversationId: string) {
-  await env.DB.prepare("UPDATE conversations SET title_status = 'failed', updated_at = ? WHERE id = ? AND title_status = 'generating'")
+  await env.DB.prepare(
+    "UPDATE conversations SET title_status = 'failed', updated_at = ? WHERE id = ? AND title_status = 'generating'"
+  )
     .bind(now(), conversationId)
     .run()
 }

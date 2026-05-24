@@ -1,4 +1,5 @@
 export type Env = {
+  ASSETS: Fetcher
   DB: D1Database
   MEDIA: R2Bucket
   IMAGES: ImagesBinding
@@ -9,11 +10,17 @@ export type Env = {
   PUBLIC_APP_URL?: string
 }
 
-export type AssetKind = "person_reference" | "turn_reference" | "generation_output"
+export type AssetKind =
+  | "person_reference"
+  | "turn_reference"
+  | "generation_output"
 export type InputRole = "edit_base" | "person_reference" | "attached_reference"
 export type TurnKind = "generation" | "modification" | "regeneration"
 export type ImageModel = "openai/gpt-image-2" | "xai/grok-imagine-image-quality"
-export type VideoModel = "bytedance/seedance-2.0" | "bytedance/seedance-2.0/image-to-video-turbo" | "xai/grok-imagine-video"
+export type VideoModel =
+  | "bytedance/seedance-2.0"
+  | "bytedance/seedance-2.0/image-to-video-turbo"
+  | "xai/grok-imagine-video"
 export type GenerationModel = ImageModel | VideoModel
 export type GenerationMode = "image" | "video"
 export type TurnStatus =

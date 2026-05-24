@@ -12,9 +12,20 @@ export class ApiError extends Error {
 
 export function errorResponse(c: Context, error: unknown) {
   if (error instanceof ApiError) {
-    return c.json({ error: { code: error.code, message: error.message } }, error.status)
+    return c.json(
+      { error: { code: error.code, message: error.message } },
+      error.status
+    )
   }
 
   console.error(error)
-  return c.json({ error: { code: "INTERNAL_ERROR", message: "An unexpected error occurred." } }, 500)
+  return c.json(
+    {
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "An unexpected error occurred.",
+      },
+    },
+    500
+  )
 }

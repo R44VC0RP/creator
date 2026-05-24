@@ -2,7 +2,11 @@ import { useEffect, useEffectEvent } from "react"
 
 import { turn, type Turn } from "@/lib/api"
 
-export function useGenerationEvents(turnId: string | null, active: boolean, onUpdate: (turn: Turn) => void) {
+export function useGenerationEvents(
+  turnId: string | null,
+  active: boolean,
+  onUpdate: (turn: Turn) => void
+) {
   const handleUpdate = useEffectEvent(onUpdate)
 
   useEffect(() => {
@@ -11,7 +15,8 @@ export function useGenerationEvents(turnId: string | null, active: boolean, onUp
     }
 
     const source = new EventSource(`/api/generations/${turnId}/events`)
-    const update = (event: MessageEvent<string>) => handleUpdate(turn(JSON.parse(event.data)))
+    const update = (event: MessageEvent<string>) =>
+      handleUpdate(turn(JSON.parse(event.data)))
 
     source.addEventListener("status", update)
     source.addEventListener("completed", update)

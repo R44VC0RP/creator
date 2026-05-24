@@ -10,9 +10,11 @@
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc -b",
     "preview": "vite preview",
-    "deploy": "npm run build && wrangler deploy",
-    "db:migrate:local": "wrangler d1 migrations apply creator-db --local",
-    "db:migrate:remote": "wrangler d1 migrations apply creator-db --remote"
+    "deploy": "bun run build && wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "benchmark": "bun run scripts/benchmark.ts",
+    "secrets:push": "bun run scripts/upload-secrets.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.79",

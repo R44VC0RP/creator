@@ -1,0 +1,17 @@
+{
+  "name": "Anomaly Creator",
+  "short_name": "Creator",
+  "description": "Create and refine generated media.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#141416",
+  "theme_color": "#141416",
+  "icons": [
+    {
+      "src": "/creator.png",
+      "sizes": "1024x1024",
+      "type": "image/png"
+    }
+  ]
+}
