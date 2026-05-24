@@ -7,7 +7,7 @@ import { now } from "../lib/values"
 function model(env: Env) {
   const provider = createAnthropic({
     baseURL: "https://opencode.ai/zen/v1",
-    authToken: env.OPENCODE_ZEN_API_KEY,
+    apiKey: env.OPENCODE_ZEN_API_KEY,
   })
   return provider("claude-haiku-4-5")
 }

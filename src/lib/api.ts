@@ -7,6 +7,10 @@ export type Person = {
 }
 
 export type ImageModel = "openai/gpt-image-2" | "xai/grok-imagine-image-quality"
+export type VideoModel = "bytedance/seedance-2.0" | "bytedance/seedance-2.0/image-to-video-turbo" | "xai/grok-imagine-video"
+export type GenerationModel = ImageModel | VideoModel
+export type GenerationMode = "image" | "video"
+export type GenerationProvider = "replicate" | "wavespeed"
 
 export type ConversationSummary = {
   id: string
@@ -32,14 +36,20 @@ export type Turn = {
   parentTurnId: string | null
   kind: "generation" | "modification" | "regeneration"
   prompt: string
-  model: ImageModel
-  aspectRatio: "1:1" | "3:2" | "2:3"
+  model: GenerationModel
+  provider: GenerationProvider
+  mode: GenerationMode
+  aspectRatio: string
   quality: "low" | "medium" | "high" | null
   resolution: "1k" | "2k" | null
+  videoResolution: "480p" | "720p" | "1080p" | null
+  duration: number | null
+  generateAudio: boolean | null
   status: "queued" | "starting" | "processing" | "persisting" | "succeeded" | "failed" | "canceled"
   outputAssetId: string | null
   previewSrc: string | null
   downloadSrc: string | null
+  contentSrc: string | null
   errorMessage: string | null
   createdAt: string
   inputs: TurnInput[]
@@ -58,13 +68,18 @@ export type GalleryItem = {
   conversationTitle: string | null
   conversationDeleted: boolean
   prompt: string
-  model: ImageModel
+  model: GenerationModel
+  mode: GenerationMode
   aspectRatio: string
   quality: string | null
   resolution: string | null
+  videoResolution: string | null
+  duration: number | null
+  generateAudio: boolean | null
   createdAt: string
   thumbnailSrc: string
   previewSrc: string
+  contentSrc: string
   downloadSrc: string
   mayDelete: boolean
   mayFork: boolean
@@ -72,10 +87,14 @@ export type GalleryItem = {
 
 export type GenerationDraft = {
   prompt: string
-  model: ImageModel
+  mode?: GenerationMode
+  model: GenerationModel
   aspectRatio: string
   quality?: string
   resolution?: string
+  videoResolution?: "480p" | "720p" | "1080p"
+  duration?: number
+  generateAudio?: boolean
   people: Person[]
   attachments: File[]
   conversationId?: string
@@ -130,14 +149,20 @@ type ServerTurn = {
   parent_turn_id: string | null
   kind: Turn["kind"]
   authored_prompt: string
-  model: ImageModel
-  aspect_ratio: Turn["aspectRatio"]
+  model: GenerationModel
+  provider: GenerationProvider
+  generation_mode: GenerationMode
+  aspect_ratio: string
   quality: Turn["quality"]
   resolution: Turn["resolution"]
+  video_resolution: Turn["videoResolution"]
+  video_duration: number | null
+  generate_audio: boolean | number | null
   status: Turn["status"]
   output_asset_id: string | null
   previewSrc: string | null
   downloadSrc: string | null
+  contentSrc: string | null
   error_message: string | null
   created_at: string
   inputs?: TurnInput[]
@@ -161,13 +186,19 @@ export function turn(value: ServerTurn): Turn {
     kind: value.kind,
     prompt: value.authored_prompt,
     model: value.model,
+    provider: value.provider,
+    mode: value.generation_mode,
     aspectRatio: value.aspect_ratio,
     quality: value.quality,
     resolution: value.resolution,
+    videoResolution: value.video_resolution,
+    duration: value.video_duration,
+    generateAudio: value.generate_audio === null ? null : Boolean(value.generate_audio),
     status: value.status,
     outputAssetId: value.output_asset_id,
     previewSrc: value.previewSrc,
     downloadSrc: value.downloadSrc,
+    contentSrc: value.contentSrc,
     errorMessage: value.error_message,
     createdAt: value.created_at,
     inputs: value.inputs ?? [],
@@ -199,9 +230,14 @@ export async function getConversation(id: string) {
 export async function createGeneration(draft: GenerationDraft) {
   const body = new FormData()
   body.set("prompt", draft.prompt)
+  body.set("mode", draft.mode ?? "image")
   body.set("model", draft.model)
   body.set("aspectRatio", draft.aspectRatio)
-  if (draft.model === "openai/gpt-image-2") {
+  if (draft.mode === "video") {
+    body.set("videoResolution", draft.videoResolution ?? "720p")
+    body.set("duration", String(draft.duration ?? 5))
+    if (draft.model === "bytedance/seedance-2.0/image-to-video-turbo") body.set("generateAudio", String(draft.generateAudio !== false))
+  } else if (draft.model === "openai/gpt-image-2") {
     body.set("quality", draft.quality ?? "medium")
   } else {
     body.set("resolution", draft.resolution ?? "2k")
@@ -228,6 +264,15 @@ export async function regenerateGeneration(turnId: string, conversationId: strin
     body: JSON.stringify({ conversationId }),
   })
   return turn(data.turn)
+}
+
+export async function reviseTurn(turnId: string, conversationId: string, prompt: string) {
+  const data = await request<{ conversation: ServerConversation; turn: ServerTurn }>(`/api/turns/${turnId}/revise`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversationId, prompt }),
+  })
+  return { conversation: conversationSummary(data.conversation), turn: turn(data.turn) }
 }
 
 export async function forkTurn(turnId: string) {

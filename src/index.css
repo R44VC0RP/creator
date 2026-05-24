@@ -151,4 +151,42 @@
   .mention-token {
     @apply mx-px inline-flex rounded-sm px-0.5 py-0 text-xs leading-4 font-medium ring-1 transition-opacity hover:opacity-80;
   }
+
+  .video-scrubber {
+    height: 0.875rem;
+    cursor: pointer;
+    appearance: none;
+    background: transparent;
+  }
+
+  .video-scrubber::-webkit-slider-runnable-track {
+    height: 0.2rem;
+    border-radius: 9999px;
+    background: linear-gradient(to right, rgb(255 255 255 / 0.92) var(--video-progress), rgb(255 255 255 / 0.28) var(--video-progress));
+  }
+
+  .video-scrubber::-moz-range-track {
+    height: 0.2rem;
+    border-radius: 9999px;
+    background: linear-gradient(to right, rgb(255 255 255 / 0.92) var(--video-progress), rgb(255 255 255 / 0.28) var(--video-progress));
+  }
+
+  .video-scrubber::-webkit-slider-thumb {
+    width: 0.7rem;
+    height: 0.7rem;
+    margin-top: -0.25rem;
+    appearance: none;
+    border-radius: 9999px;
+    background: white;
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.4);
+  }
+
+  .video-scrubber::-moz-range-thumb {
+    width: 0.7rem;
+    height: 0.7rem;
+    border: 0;
+    border-radius: 9999px;
+    background: white;
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.4);
+  }
 }

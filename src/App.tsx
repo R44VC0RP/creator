@@ -25,6 +25,8 @@ import {
   Plus,
   RefreshCw,
   Trash2,
+  Video,
+  Volume2,
   X,
 } from "lucide-react"
 import { Link, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom"
@@ -81,6 +83,7 @@ import {
 } from "@/components/ui/sidebar"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { VideoPlayer } from "@/components/video-player"
 import { useGenerationEvents } from "@/hooks/use-generation-events"
 import {
   addPerson,
@@ -94,9 +97,11 @@ import {
   listGallery,
   listPeople,
   regenerateGeneration,
+  reviseTurn,
   type ConversationSummary,
   type GalleryItem,
   type GenerationDraft,
+  type GenerationModel,
   type ImageModel,
   type Person,
   type Turn,
@@ -104,10 +109,16 @@ import {
 import { cn } from "@/lib/utils"
 
 type ImageSettings = {
+  mode: "image" | "video"
   model: ImageModel
+  videoModel: "bytedance/seedance-2.0/image-to-video-turbo" | "xai/grok-imagine-video"
   aspectRatio: "1:1" | "3:2" | "2:3"
   quality: "low" | "medium" | "high"
   resolution: "1k" | "2k"
+  videoAspectRatio: string
+  videoResolution: "480p" | "720p" | "1080p"
+  duration: number
+  generateAudio: boolean
 }
 
 type ActiveMention = {
@@ -115,7 +126,7 @@ type ActiveMention = {
   range: Range
 }
 
-type ComposerSubmission = Omit<GenerationDraft, "model" | "aspectRatio" | "quality" | "resolution" | "conversationId" | "parentTurnId">
+type ComposerSubmission = Omit<GenerationDraft, "mode" | "model" | "aspectRatio" | "quality" | "resolution" | "videoResolution" | "duration" | "generateAudio" | "conversationId" | "parentTurnId">
 
 type DraftAttachment = {
   file: File
@@ -123,11 +134,17 @@ type DraftAttachment = {
 }
 
 function loadSettings(): ImageSettings {
-  const fallback: ImageSettings = { model: "openai/gpt-image-2", aspectRatio: "3:2", quality: "medium", resolution: "2k" }
+  const fallback: ImageSettings = { mode: "image", model: "openai/gpt-image-2", videoModel: "bytedance/seedance-2.0/image-to-video-turbo", aspectRatio: "3:2", quality: "medium", resolution: "2k", videoAspectRatio: "16:9", videoResolution: "720p", duration: 5, generateAudio: true }
   const saved = window.localStorage.getItem("creator-image-settings")
   if (!saved) return fallback
   try {
-    return { ...fallback, ...JSON.parse(saved) }
+    const savedValue = JSON.parse(saved) as Omit<Partial<ImageSettings>, "videoModel"> & { videoModel?: string }
+    const videoModel: ImageSettings["videoModel"] | undefined = savedValue.videoModel === "bytedance/seedance-2.0"
+      ? "bytedance/seedance-2.0/image-to-video-turbo"
+      : savedValue.videoModel === "bytedance/seedance-2.0/image-to-video-turbo" || savedValue.videoModel === "xai/grok-imagine-video"
+        ? savedValue.videoModel
+        : undefined
+    return { ...fallback, ...savedValue, videoModel: videoModel ?? fallback.videoModel }
   } catch {
     return fallback
   }
@@ -141,7 +158,20 @@ function message(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong."
 }
 
-function modelName(model: ImageModel) {
+function failureMessage(turn: Turn) {
+  const raw = turn.errorMessage ?? ""
+  if (/sensitive|flagged|E005/i.test(raw)) {
+    return "This prompt or source image was flagged by the safety filter. Try a different prompt or starting image."
+  }
+  if (/invalid image format/i.test(raw)) {
+    return "The source image could not be used for this generation. Try again or choose another image."
+  }
+  return raw || (turn.mode === "video" ? "Video generation failed." : "Image generation failed.")
+}
+
+function modelName(model: GenerationModel) {
+  if (model === "bytedance/seedance-2.0" || model === "bytedance/seedance-2.0/image-to-video-turbo") return "Seedance"
+  if (model === "xai/grok-imagine-video") return "Grok"
   return model === "xai/grok-imagine-image-quality" ? "Grok" : "GPT"
 }
 
@@ -156,13 +186,13 @@ function prepareCompletionAlert() {
   audio.load()
 }
 
-function notifyGenerationComplete() {
+function notifyGenerationComplete(mode: "image" | "video") {
   const audio = new Audio(COMPLETION_SOUND)
   audio.volume = 0.7
   void audio.play().catch(() => undefined)
 
   if ((document.visibilityState === "hidden" || !document.hasFocus()) && "Notification" in window && Notification.permission === "granted") {
-    new Notification("Image ready", { body: "Your generation is complete." })
+    new Notification(mode === "video" ? "Video ready" : "Image ready", { body: `Your generated ${mode} is complete.` })
   }
 }
 
@@ -211,6 +241,14 @@ export function App() {
               <Route path="/gallery/:assetId" element={<GalleryPage />} />
             </Routes>
           </LayoutGroup>
+          <div className="pointer-events-none fixed right-4 bottom-4 z-10 hidden rounded-md border border-border/35 bg-background/55 px-2.5 py-2 text-[10px] text-muted-foreground/60 backdrop-blur-sm lg:grid lg:grid-cols-[auto_auto] lg:gap-x-3 lg:gap-y-1">
+            <span className="font-mono">N</span><span>New</span>
+            <span className="font-mono">I</span><span>Image</span>
+            <span className="font-mono">V</span><span>Video</span>
+            <span className="font-mono">R</span><span>Rerun</span>
+            <span className="font-mono">Esc</span><span>Close</span>
+            <span className="font-mono">Option+I/V</span><span>While typing</span>
+          </div>
         </SidebarInset>
       </SidebarProvider>
     </TooltipProvider>
@@ -409,9 +447,19 @@ function LandingPage({ people, settings, onSettingsChange }: { people: Person[];
   const mutation = useMutation({ mutationFn: createGeneration })
   const skipComposerMotion = Boolean((location.state as { skipComposerMotion?: boolean } | null)?.skipComposerMotion)
 
+  useEffect(() => {
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (!canUseShortcut(event) || event.key.toLowerCase() !== "i") return
+      event.preventDefault()
+      onSettingsChange({ mode: "image", model: settings.model === "openai/gpt-image-2" ? "xai/grok-imagine-image-quality" : "openai/gpt-image-2" })
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [onSettingsChange, settings.model])
+
   async function submit(value: ComposerSubmission) {
     prepareCompletionAlert()
-    const result = await mutation.mutateAsync({ ...value, ...settings })
+    const result = await mutation.mutateAsync({ ...value, ...settings, mode: "image" })
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["conversations"] }),
       queryClient.invalidateQueries({ queryKey: ["conversation", result.conversation.id] }),
@@ -427,11 +475,11 @@ function LandingPage({ people, settings, onSettingsChange }: { people: Person[];
           people={people}
           className="min-h-[18svh] w-[clamp(22rem,46vw,49.5rem)] max-w-[calc(100vw-2rem)]"
           placeholder="Describe an image... Use @ to add someone"
-          settings={settings}
+          settings={{ ...settings, mode: "image" }}
           onSettingsChange={onSettingsChange}
           onSubmit={submit}
           busy={mutation.isPending}
-          canToggleModel
+          canToggleImageModel
         />
       </motion.div>
     </div>
@@ -446,6 +494,7 @@ function ConversationPage({ people, settings, onSettingsChange }: { people: Pers
   const stateFocus = (location.state as { focusTurnId?: string } | null)?.focusTurnId
   const animateComposer = Boolean((location.state as { animateComposer?: boolean } | null)?.animateComposer)
   const [focusedId, setFocusedId] = useState<string | null>(stateFocus ?? null)
+  const [revisionTurn, setRevisionTurn] = useState<Turn | null>(null)
   const alertedTurns = useRef(new Set<string>())
   const wheelTotal = useRef(0)
   const wheelLocked = useRef(false)
@@ -454,14 +503,33 @@ function ConversationPage({ people, settings, onSettingsChange }: { people: Pers
   const create = useMutation({ mutationFn: createGeneration })
   const cancel = useMutation({ mutationFn: cancelGeneration })
   const regenerate = useMutation({ mutationFn: (turnId: string) => regenerateGeneration(turnId, conversationId) })
+  const revise = useMutation({ mutationFn: ({ turnId, prompt }: { turnId: string; prompt: string }) => reviseTurn(turnId, conversationId, prompt) })
   const fork = useMutation({ mutationFn: forkTurn })
   const turns = conversation.data?.turns ?? []
   const activeTurn = turns.find((item) => !["succeeded", "failed", "canceled"].includes(item.status)) ?? null
-  const latestSuccessful = [...turns].reverse().find((item) => item.status === "succeeded" && item.previewSrc) ?? null
+  const latestSuccessful = [...turns].reverse().find((item) => item.mode === "image" && item.status === "succeeded" && item.previewSrc) ?? null
   const latestTerminalTurn = [...turns].reverse().find((item) => ["succeeded", "failed", "canceled"].includes(item.status)) ?? null
   const focusedTurn = turns.find((item) => item.id === focusedId) ?? activeTurn ?? latestTerminalTurn ?? turns.at(-1) ?? null
   const visibleTurns = turns.filter((item) => item.previewSrc || !["succeeded", "failed", "canceled"].includes(item.status) || item.status === "failed" || item.status === "canceled")
   const conversationModel = latestSuccessful?.model ?? activeTurn?.model ?? "openai/gpt-image-2"
+  const sourceImage = focusedTurn?.mode === "image" && focusedTurn.status === "succeeded" ? focusedTurn : latestSuccessful
+
+  useEffect(() => {
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (!canUseShortcut(event)) return
+      if (event.key.toLowerCase() === "i") {
+        event.preventDefault()
+        onSettingsChange({ mode: "image" })
+      }
+      if (event.key.toLowerCase() === "v" && sourceImage) {
+        event.preventDefault()
+        const videoModel = settings.mode === "video" && settings.videoModel === "bytedance/seedance-2.0/image-to-video-turbo" ? "xai/grok-imagine-video" : "bytedance/seedance-2.0/image-to-video-turbo"
+        onSettingsChange({ mode: "video", videoModel, videoResolution: videoModel === "xai/grok-imagine-video" ? "720p" : settings.videoResolution === "480p" ? "720p" : settings.videoResolution })
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [onSettingsChange, settings.mode, settings.videoModel, settings.videoResolution, sourceImage])
 
   useEffect(() => {
     if (!animateComposer) return
@@ -480,7 +548,7 @@ function ConversationPage({ people, settings, onSettingsChange }: { people: Pers
       setFocusedId(nextTurn.id)
       if (!alertedTurns.current.has(nextTurn.id)) {
         alertedTurns.current.add(nextTurn.id)
-        notifyGenerationComplete()
+        notifyGenerationComplete(nextTurn.mode)
       }
     }
     void queryClient.invalidateQueries({ queryKey: ["conversation", conversationId] })
@@ -489,9 +557,31 @@ function ConversationPage({ people, settings, onSettingsChange }: { people: Pers
   })
 
   async function submit(value: ComposerSubmission) {
-    if (!latestSuccessful) return
+    if (revisionTurn) {
+      prepareCompletionAlert()
+      const result = await revise.mutateAsync({ turnId: revisionTurn.id, prompt: value.prompt })
+      setRevisionTurn(null)
+      await queryClient.invalidateQueries({ queryKey: ["conversations"] })
+      navigate(`/c/${result.conversation.id}`, { state: { focusTurnId: result.turn.id } })
+      return
+    }
+    if (!sourceImage) return
     prepareCompletionAlert()
-    const result = await create.mutateAsync({ ...value, ...settings, model: conversationModel, conversationId, parentTurnId: latestSuccessful.id })
+    const result = settings.mode === "video"
+      ? await create.mutateAsync({
+          ...value,
+          people: [],
+          attachments: [],
+          mode: "video",
+          model: settings.videoModel,
+          aspectRatio: settings.videoAspectRatio,
+          videoResolution: settings.videoResolution,
+          duration: settings.duration,
+          generateAudio: settings.generateAudio,
+          conversationId,
+          parentTurnId: sourceImage.id,
+        })
+      : await create.mutateAsync({ ...value, ...settings, mode: "image", model: conversationModel as ImageModel, conversationId, parentTurnId: sourceImage.id })
     setFocusedId(result.turn.id)
     await queryClient.invalidateQueries({ queryKey: ["conversation", conversationId] })
   }
@@ -523,6 +613,29 @@ function ConversationPage({ people, settings, onSettingsChange }: { people: Pers
     const result = await fork.mutateAsync(turnId)
     await queryClient.invalidateQueries({ queryKey: ["conversations"] })
     navigate(`/c/${result.conversation.id}`, { state: { focusTurnId: result.focusedTurn.id } })
+  }
+
+  function beginRevision(turn: Turn) {
+    if (activeTurn) return
+    setRevisionTurn(turn)
+    if (turn.mode === "video") {
+      onSettingsChange({
+        mode: "video",
+        videoModel: turn.model === "xai/grok-imagine-video" ? "xai/grok-imagine-video" : "bytedance/seedance-2.0/image-to-video-turbo",
+        videoAspectRatio: turn.aspectRatio,
+        videoResolution: turn.videoResolution ?? "720p",
+        duration: turn.duration ?? 5,
+        generateAudio: turn.generateAudio !== false,
+      })
+      return
+    }
+    onSettingsChange({
+      mode: "image",
+      model: turn.model as ImageModel,
+      aspectRatio: turn.aspectRatio as ImageSettings["aspectRatio"],
+      quality: turn.quality ?? "medium",
+      resolution: turn.resolution ?? "2k",
+    })
   }
 
   function focusAdjacent(direction: -1 | 1) {
@@ -564,9 +677,10 @@ function ConversationPage({ people, settings, onSettingsChange }: { people: Pers
                 <FocusedOutput
                   turn={focusedTurn}
                   busy={Boolean(activeTurn)}
-                  onCancel={() => activeTurn?.id === focusedTurn.id && cancel.mutateAsync(activeTurn.id).then(() => queryClient.invalidateQueries({ queryKey: ["conversation", conversationId] }))}
+                  onCancel={activeTurn?.id === focusedTurn.id && activeTurn.provider === "replicate" ? () => cancel.mutateAsync(activeTurn.id).then(() => queryClient.invalidateQueries({ queryKey: ["conversation", conversationId] })) : undefined}
                   onRegenerate={() => runRegenerate(focusedTurn.id)}
                   onFork={() => runFork(focusedTurn.id)}
+                  onRevise={() => beginRevision(focusedTurn)}
                 />
               </motion.div>
             </AnimatePresence>
@@ -575,14 +689,19 @@ function ConversationPage({ people, settings, onSettingsChange }: { people: Pers
       </div>
       <motion.div layoutId={animateComposer ? "prompt-composer" : undefined} className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center" transition={{ type: "spring", stiffness: 360, damping: 34, mass: 0.85 }}>
         <PromptComposer
+          key={revisionTurn ? `revise-${revisionTurn.id}` : "compose"}
           people={people}
           className="pointer-events-auto min-h-31 w-[min(49.5rem,calc(100vw-2rem))]"
           placeholder="Describe a change... Use @ to add someone"
-          settings={{ ...settings, model: conversationModel }}
+          settings={revisionTurn ? settings : { ...settings, model: conversationModel as ImageModel }}
           onSettingsChange={onSettingsChange}
           onSubmit={submit}
-          busy={Boolean(activeTurn) || create.isPending}
-          disabled={!latestSuccessful}
+          busy={Boolean(activeTurn) || create.isPending || revise.isPending}
+          disabled={!sourceImage && !revisionTurn}
+          allowVideo={Boolean(sourceImage)}
+          initialPrompt={revisionTurn?.prompt}
+          revisionMode={Boolean(revisionTurn)}
+          onCancelRevision={() => setRevisionTurn(null)}
         />
       </motion.div>
     </div>
@@ -612,33 +731,45 @@ function RevisionRail({ turns, activeId, disabled, onSelect }: { turns: Turn[]; 
   )
 }
 
-function FocusedOutput({ turn, busy, onCancel, onRegenerate, onFork }: {
+function FocusedOutput({ turn, busy, onCancel, onRegenerate, onFork, onRevise }: {
   turn: Turn
   busy: boolean
-  onCancel: () => void
+  onCancel?: () => void
   onRegenerate: () => void
   onFork: () => void
+  onRevise: () => void
 }) {
   const pending = !["succeeded", "failed", "canceled"].includes(turn.status)
   const frameClassName = cn(
-    "w-[min(49.5rem,calc(100vw-2rem))]",
-    turn.aspectRatio === "3:2" ? "aspect-[3/2]" : turn.aspectRatio === "2:3" ? "aspect-[2/3]" : "aspect-square"
+    turn.aspectRatio === "16:9"
+      ? "aspect-video w-[min(49.5rem,calc(100vw-2rem))]"
+      : turn.aspectRatio === "9:16"
+        ? "aspect-[9/16] w-[min(24rem,calc(100vw-2rem),calc((100svh-16rem)*9/16))]"
+        : turn.aspectRatio === "3:2"
+          ? "aspect-[3/2] w-[min(49.5rem,calc(100vw-2rem))]"
+          : turn.aspectRatio === "2:3"
+            ? "aspect-[2/3] w-[min(30rem,calc(100vw-2rem),calc((100svh-16rem)*2/3))]"
+            : "aspect-square w-[min(38rem,calc(100vw-2rem),calc(100svh-16rem))]"
   )
   return (
     <figure className="group relative flex max-h-full flex-col items-center gap-2">
       <div className={cn("relative flex items-center justify-center overflow-hidden rounded-xl border border-white/8 bg-card shadow-2xl shadow-black/35", frameClassName)}>
         <AnimatePresence mode="wait">
-          {turn.status === "succeeded" && turn.previewSrc ? (
+          {turn.status === "succeeded" && turn.mode === "video" && turn.contentSrc ? (
+            <VideoPlayer key={turn.contentSrc} src={turn.contentSrc} poster={turn.previewSrc ?? undefined} label={`Generated video: ${turn.prompt}`} />
+          ) : turn.status === "succeeded" && turn.previewSrc ? (
             <img key={turn.previewSrc} src={turn.previewSrc} alt={turn.prompt} className="size-full object-cover" />
           ) : pending ? (
-            <motion.div key="pending" className="flex flex-col items-center gap-3 text-xs text-muted-foreground" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-              <LoaderCircle className="size-4 animate-spin" />
-              <span>{turn.status === "persisting" ? "Saving image" : "Generating image"}</span>
-              <Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
-            </motion.div>
+            turn.mode === "video" ? <VideoProgress turn={turn} onCancel={onCancel} /> : (
+              <motion.div key="pending" className="flex flex-col items-center gap-3 text-xs text-muted-foreground" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                <LoaderCircle className="size-4 animate-spin" />
+                <span>{turn.status === "persisting" ? "Saving image" : "Generating image"}</span>
+                {onCancel && <Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>}
+              </motion.div>
+            )
           ) : (
             <motion.div key="terminal" className="flex flex-col items-center gap-2 text-xs text-muted-foreground" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-              <span>{turn.status === "failed" ? turn.errorMessage ?? "Generation failed" : "Generation canceled"}</span>
+              <span className="max-w-sm text-center">{turn.status === "failed" ? failureMessage(turn) : "Generation canceled"}</span>
               <Button variant="outline" size="sm" disabled={busy} aria-keyshortcuts="R" title="Try again (R)" onClick={onRegenerate}>
                 <RefreshCw />
                 Try again
@@ -649,20 +780,37 @@ function FocusedOutput({ turn, busy, onCancel, onRegenerate, onFork }: {
         {turn.status === "succeeded" && (
           <div className="absolute top-2 right-2 flex gap-0.5 rounded-lg border border-white/10 bg-black/35 p-0.5 opacity-0 backdrop-blur-md transition-opacity group-hover:opacity-100 focus-within:opacity-100">
             <Button size="icon-sm" variant="ghost" disabled={busy} aria-keyshortcuts="R" title="Regenerate (R)" className="text-white hover:bg-white/14 hover:text-white" onClick={onRegenerate}><RefreshCw /><span className="sr-only">Regenerate</span></Button>
-            <Button size="icon-sm" variant="ghost" disabled={busy} className="text-white hover:bg-white/14 hover:text-white" onClick={onFork}><GitFork /><span className="sr-only">Fork</span></Button>
+            {turn.mode === "image" && <Button size="icon-sm" variant="ghost" disabled={busy} className="text-white hover:bg-white/14 hover:text-white" onClick={onFork}><GitFork /><span className="sr-only">Fork</span></Button>}
             {turn.downloadSrc && <Button size="icon-sm" variant="ghost" className="text-white hover:bg-white/14 hover:text-white" asChild><a href={turn.downloadSrc} download><Download /><span className="sr-only">Download</span></a></Button>}
           </div>
         )}
       </div>
-      <PromptSummary turn={turn} />
+      <PromptSummary turn={turn} onRevise={busy ? undefined : onRevise} />
     </figure>
   )
 }
 
-function PromptSummary({ turn }: { turn: Turn }) {
+function VideoProgress({ turn, onCancel }: { turn: Turn; onCancel?: () => void }) {
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    const started = Date.parse(turn.createdAt)
+    const interval = window.setInterval(() => setElapsed(Math.max(0, Math.floor((Date.now() - started) / 1000))), 1000)
+    return () => window.clearInterval(interval)
+  }, [turn.createdAt])
+  const elapsedText = `${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`
+  return (
+    <motion.div key="video-pending" className="flex w-60 flex-col items-center gap-3 text-xs text-muted-foreground" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <span>{turn.status === "persisting" ? "Saving video" : "Generating video"} · {elapsedText}</span>
+      <div className="relative h-1 w-full overflow-hidden rounded-full bg-muted"><motion.span className="absolute inset-y-0 w-1/3 rounded-full bg-primary" animate={{ x: ["-100%", "300%"] }} transition={{ repeat: Infinity, duration: 1.2, ease: "easeInOut" }} /></div>
+      {turn.status !== "persisting" && onCancel && <Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>}
+    </motion.div>
+  )
+}
+
+function PromptSummary({ turn, onRevise }: { turn: Turn; onRevise?: () => void }) {
   const mentions = new Map(turn.inputs.filter((input) => input.person).map((input) => [`@${input.person!.handle}`, input]))
   return (
-    <div className="flex max-w-xl flex-wrap items-center justify-center gap-1 text-[11px] text-muted-foreground">
+    <button type="button" disabled={!onRevise} onClick={onRevise} title={onRevise ? "Edit prompt into a new branch" : undefined} className={cn("group/prompt flex max-w-xl flex-wrap items-center justify-center gap-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors", onRevise && "hover:bg-muted/30 hover:text-foreground") }>
       {turn.prompt.split(/(@[\w-]+)/g).map((fragment, index) => {
         const input = mentions.get(fragment)
         if (!input?.person) return <span key={`${fragment}-${index}`}>{fragment}</span>
@@ -676,7 +824,8 @@ function PromptSummary({ turn }: { turn: Turn }) {
           </Tooltip>
         )
       })}
-    </div>
+      {onRevise && <span className="ml-1 opacity-0 transition-opacity group-hover/prompt:opacity-100">Edit</span>}
+    </button>
   )
 }
 
@@ -727,6 +876,7 @@ function GalleryPage() {
               <article key={item.assetId} className="group relative mb-3 break-inside-avoid">
                 <Link to={`/gallery/${item.assetId}`} className="block overflow-hidden rounded-lg bg-card" style={{ aspectRatio: item.aspectRatio.replace(":", " / ") }}>
                   <img src={item.thumbnailSrc} alt={item.prompt} className="size-full object-cover transition-transform duration-300 group-hover:scale-[1.015]" />
+                  {item.mode === "video" && <span className="absolute top-2 left-2 rounded-sm bg-black/55 px-1.5 py-0.5 text-[10px] text-white backdrop-blur-sm">Video</span>}
                 </Link>
                 <p className="mt-1.5 truncate text-[11px] text-muted-foreground">{item.prompt}</p>
               </article>
@@ -744,7 +894,7 @@ function GalleryPage() {
                 <Button variant="ghost" size="icon-sm" aria-keyshortcuts="Escape" title="Close (Esc)" className="ml-1" onClick={() => navigate("/gallery")}><X /><span className="sr-only">Close</span></Button>
               </div>
               <motion.div className="overflow-hidden rounded-xl shadow-2xl shadow-black/30" style={{ aspectRatio: selected.aspectRatio.replace(":", " / "), width: selectedWidth }} initial={{ opacity: 0, scale: 0.985 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.99 }} transition={{ duration: 0.18, ease: "easeOut" }}>
-                <img src={selected.previewSrc} alt={selected.prompt} className="size-full object-cover" />
+                {selected.mode === "video" ? <VideoPlayer key={selected.contentSrc} src={selected.contentSrc} poster={selected.previewSrc} label={`Generated video: ${selected.prompt}`} /> : <img src={selected.previewSrc} alt={selected.prompt} className="size-full object-cover" />}
               </motion.div>
               <div className="flex max-w-xl items-center gap-2 text-xs text-muted-foreground">
                 <span>{selected.prompt}</span>
@@ -761,7 +911,7 @@ function GalleryPage() {
 function OutputActions({ item, onFork, onDelete }: { item: GalleryItem; onFork: () => void; onDelete: () => void }) {
   return (
     <div className="flex items-center gap-1">
-      <Button variant="outline" size="sm" onClick={onFork}><GitFork />Fork</Button>
+      {item.mode === "image" && <Button variant="outline" size="sm" onClick={onFork}><GitFork />Fork</Button>}
       <Button variant="outline" size="sm" asChild><a href={item.downloadSrc} download><Download />Download</a></Button>
       <AlertDialog>
         <AlertDialogTrigger asChild>
@@ -782,7 +932,7 @@ function OutputActions({ item, onFork, onDelete }: { item: GalleryItem; onFork: 
   )
 }
 
-function PromptComposer({ people, className, placeholder, settings, onSettingsChange, onSubmit, busy, disabled = false, canToggleModel = false }: {
+function PromptComposer({ people, className, placeholder, settings, onSettingsChange, onSubmit, busy, disabled = false, canToggleImageModel = false, allowVideo = false, initialPrompt = "", revisionMode = false, onCancelRevision }: {
   people: Person[]
   className?: string
   placeholder: string
@@ -791,11 +941,15 @@ function PromptComposer({ people, className, placeholder, settings, onSettingsCh
   onSubmit: (draft: ComposerSubmission) => Promise<void>
   busy: boolean
   disabled?: boolean
-  canToggleModel?: boolean
+  canToggleImageModel?: boolean
+  allowVideo?: boolean
+  initialPrompt?: string
+  revisionMode?: boolean
+  onCancelRevision?: () => void
 }) {
   const editorRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
-  const [hasPrompt, setHasPrompt] = useState(false)
+  const [hasPrompt, setHasPrompt] = useState(Boolean(initialPrompt))
   const [activeMention, setActiveMention] = useState<ActiveMention | null>(null)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
   const [hoveredPerson, setHoveredPerson] = useState<Person | null>(null)
@@ -803,14 +957,18 @@ function PromptComposer({ people, className, placeholder, settings, onSettingsCh
   const attachmentsRef = useRef<DraftAttachment[]>([])
   const [dragging, setDragging] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const isVideo = settings.mode === "video"
   const isGrok = settings.model === "xai/grok-imagine-image-quality"
-  const allowsAttachment = !isGrok || canToggleModel
+  const isSeedance = settings.videoModel === "bytedance/seedance-2.0/image-to-video-turbo"
+  const allowsAttachment = !isVideo && (!isGrok || canToggleImageModel)
   const attachmentLimit = isGrok ? 1 : 2
-  const resolvedPlaceholder = isGrok
-    ? canToggleModel ? "Type a text prompt or add one reference image..." : "Describe a change..."
+  const resolvedPlaceholder = isVideo
+    ? "Describe motion, camera movement, and sound..."
+    : isGrok
+    ? canToggleImageModel ? "Type a text prompt or add one reference image..." : "Describe a change..."
     : placeholder
   const deferredQuery = useDeferredValue(activeMention?.query ?? "")
-  const suggestions = !isGrok && activeMention ? people.filter((person) => `${person.name} ${person.handle}`.toLowerCase().includes(deferredQuery.toLowerCase())).slice(0, 5) : []
+  const suggestions = !revisionMode && !isVideo && !isGrok && activeMention ? people.filter((person) => `${person.name} ${person.handle}`.toLowerCase().includes(deferredQuery.toLowerCase())).slice(0, 5) : []
   const showSuggestions = suggestions.length > 0 && activeMention !== null
 
   useEffect(() => {
@@ -865,8 +1023,8 @@ function PromptComposer({ people, className, placeholder, settings, onSettingsCh
     setActiveMention(null)
     setError(null)
   }
-  function toggleModel() {
-    if (!canToggleModel || busy || disabled) return
+  function toggleImageModel() {
+    if (!canToggleImageModel || busy || disabled || revisionMode) return
     if (!isGrok && (mentionedPeople().length > 0 || attachments.length > 1)) {
       setError("Grok supports one reference image and no tagged People.")
       return
@@ -875,7 +1033,24 @@ function PromptComposer({ people, className, placeholder, settings, onSettingsCh
     setActiveMention(null)
     setError(null)
   }
+  function selectImageMode() {
+    if (busy || disabled || revisionMode) return
+    if (!isVideo) toggleImageModel()
+    else onSettingsChange({ mode: "image" })
+  }
+  function selectVideoMode() {
+    if (!allowVideo || busy || disabled || revisionMode) return
+    if (isVideo) onSettingsChange({ videoModel: isSeedance ? "xai/grok-imagine-video" : "bytedance/seedance-2.0/image-to-video-turbo", videoResolution: "720p" })
+    else onSettingsChange({ mode: "video" })
+    clearAttachments()
+    setActiveMention(null)
+    setError(null)
+  }
   function addFiles(files: File[]) {
+    if (revisionMode) {
+      setError("This branch reuses the original references and settings.")
+      return
+    }
     if (!allowsAttachment) {
       setError("Grok follow-up prompts edit the previous output and cannot include another reference image.")
       return
@@ -904,7 +1079,7 @@ function PromptComposer({ people, className, placeholder, settings, onSettingsCh
     if (!prompt || !editorRef.current || busy || disabled) return
     setError(null)
     try {
-      await onSubmit({ prompt, people: mentionedPeople(), attachments: attachments.map((attachment) => attachment.file) })
+      await onSubmit({ prompt, people: isVideo ? [] : mentionedPeople(), attachments: isVideo ? [] : attachments.map((attachment) => attachment.file) })
       editorRef.current.innerHTML = ""
       setHasPrompt(false)
       clearAttachments()
@@ -914,6 +1089,8 @@ function PromptComposer({ people, className, placeholder, settings, onSettingsCh
     }
   }
   function keyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.altKey && event.key.toLowerCase() === "i") { event.preventDefault(); selectImageMode(); return }
+    if (event.altKey && event.key.toLowerCase() === "v" && allowVideo) { event.preventDefault(); selectVideoMode(); return }
     if (showSuggestions && event.key === "ArrowDown") { event.preventDefault(); setHighlightedIndex((current) => (current + 1) % suggestions.length); return }
     if (showSuggestions && event.key === "ArrowUp") { event.preventDefault(); setHighlightedIndex((current) => (current - 1 + suggestions.length) % suggestions.length); return }
     if (showSuggestions && event.key === "Enter") { event.preventDefault(); selectPerson(suggestions[Math.min(highlightedIndex, suggestions.length - 1)]); return }
@@ -931,7 +1108,7 @@ function PromptComposer({ people, className, placeholder, settings, onSettingsCh
       <PopoverAnchor asChild>
         <div onDragOver={(event) => { event.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)} onDrop={drop} className={cn(
           "relative mt-6 flex flex-col rounded-xl border bg-card/92 p-2.5 shadow-xl shadow-black/15 backdrop-blur-md transition-colors",
-          isGrok ? "border-[#2B2B2B] focus-within:border-[#3a3a3a]" : "border-[#435064]/70 focus-within:border-[#596b85]",
+          isVideo ? "border-[#473e35]/70 focus-within:border-[#655746]" : isGrok ? "border-[#2B2B2B] focus-within:border-[#3a3a3a]" : "border-[#435064]/70 focus-within:border-[#596b85]",
           dragging && "border-primary/55 ring-2 ring-primary/15",
           className
         )}>
@@ -939,27 +1116,39 @@ function PromptComposer({ people, className, placeholder, settings, onSettingsCh
             type="button"
             initial={{ opacity: 0, y: 5 }}
             animate={{ opacity: 1, y: 0 }}
-            disabled={!canToggleModel || busy || disabled}
-            aria-label={canToggleModel ? `Switch image model. Currently ${modelName(settings.model)}` : modelName(settings.model)}
-            title={canToggleModel ? "Switch model" : undefined}
+            disabled={busy || disabled || revisionMode}
+            aria-label={`Image mode. ${modelName(settings.model)}`}
+            title={canToggleImageModel ? "Select image or switch model" : "Select image mode"}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={toggleModel}
+            onClick={selectImageMode}
             className={cn(
               "absolute top-0 left-3 flex -translate-y-full items-center gap-1.5 rounded-t-md border border-b-0 px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors",
-              isGrok ? "border-[#2B2B2B] bg-[#2B2B2B] text-foreground" : "border-[#435064]/70 bg-[#252a33] text-[#aebbcf]",
-              canToggleModel ? "hover:brightness-110" : "cursor-default"
+              isVideo ? "border-border bg-card text-muted-foreground" : isGrok ? "border-[#2B2B2B] bg-[#2B2B2B] text-foreground" : "border-[#435064]/70 bg-[#252a33] text-[#aebbcf]",
+              canToggleImageModel || isVideo ? "hover:brightness-110" : "cursor-default"
             )}
           >
+            <ImageIcon className="size-3" />
             {modelName(settings.model)}
-            {canToggleModel && <ArrowLeftRight className="size-3 text-muted-foreground" />}
+            {canToggleImageModel && <ArrowLeftRight className="size-3 text-muted-foreground" />}
           </motion.button>
+          {allowVideo && (
+            <motion.button type="button" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} disabled={busy || disabled || revisionMode} aria-label={`Video mode. ${modelName(settings.videoModel)}`} title="Select video or switch model" onMouseDown={(event) => event.preventDefault()} onClick={selectVideoMode} className={cn(
+              "absolute top-0 right-3 flex -translate-y-full items-center gap-1.5 rounded-t-md border border-b-0 px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors hover:brightness-110",
+              isVideo ? "border-[#655746] bg-[#332e29] text-[#d3c4af]" : "border-border bg-card text-muted-foreground"
+            )}>
+              <Video className="size-3" />
+              {modelName(settings.videoModel)}
+              <ArrowLeftRight className="size-3 text-muted-foreground" />
+            </motion.button>
+          )}
+          {revisionMode && <div className="mb-2 flex items-center justify-between rounded-md bg-muted/35 px-2 py-1 text-[10px] text-muted-foreground"><span>New branch · original references and settings reused</span><Button type="button" variant="ghost" size="xs" onClick={onCancelRevision}>Cancel</Button></div>}
           <div ref={editorRef} role="textbox" aria-label="Image prompt" aria-multiline="true" data-placeholder={resolvedPlaceholder} contentEditable={!disabled && !busy} suppressContentEditableWarning className="prompt-editor min-h-0 flex-1 overflow-y-auto px-0.5 pt-0.5 text-[13px] leading-6 text-foreground outline-none" onInput={handleInput} onKeyDown={keyDown} onMouseOver={mouseOver} onMouseLeave={() => setHoveredPerson(null)} onPaste={(event) => {
             const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"))
             if (images.length) {
               event.preventDefault()
               addFiles(images)
             }
-          }} />
+          }}>{initialPrompt}</div>
           <AnimatePresence>
             {attachments.length > 0 && <motion.div className="mt-2 flex gap-1.5" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               {attachments.map((attachment, index) => (
@@ -976,18 +1165,30 @@ function PromptComposer({ people, className, placeholder, settings, onSettingsCh
           <div className="mt-2 flex items-end justify-between gap-1.5">
             <div className="flex items-center gap-1">
               <input ref={fileRef} className="hidden" type="file" accept="image/*" multiple onChange={(event) => addFiles(Array.from(event.target.files ?? []))} />
-              <Button type="button" size="icon-sm" variant="ghost" disabled={disabled || busy || !allowsAttachment || attachments.length >= attachmentLimit} title={isGrok ? (canToggleModel ? "Add one Grok reference image" : "Grok edits the previous output") : undefined} onClick={() => fileRef.current?.click()}><ImagePlus /><span className="sr-only">Add reference image</span></Button>
-              <Select value={settings.aspectRatio} disabled={busy} onValueChange={(value) => onSettingsChange({ aspectRatio: value as ImageSettings["aspectRatio"] })}>
+              {!isVideo && !revisionMode && <Button type="button" size="icon-sm" variant="ghost" disabled={disabled || busy || !allowsAttachment || attachments.length >= attachmentLimit} title={isGrok ? (canToggleImageModel ? "Add one Grok reference image" : "Grok edits the previous output") : undefined} onClick={() => fileRef.current?.click()}><ImagePlus /><span className="sr-only">Add reference image</span></Button>}
+              <Select value={isVideo ? settings.videoAspectRatio : settings.aspectRatio} disabled={busy || revisionMode} onValueChange={(value) => isVideo ? onSettingsChange({ videoAspectRatio: value }) : onSettingsChange({ aspectRatio: value as ImageSettings["aspectRatio"] })}>
                 <SelectTrigger size="sm" className="h-6 border-transparent bg-muted/45 px-2 text-[10px] text-muted-foreground hover:text-foreground"><SelectValue /></SelectTrigger>
-                <SelectContent position="popper" align="start" className="min-w-24"><SelectItem value="3:2" className="text-[11px]!">3:2</SelectItem><SelectItem value="1:1" className="text-[11px]!">1:1</SelectItem><SelectItem value="2:3" className="text-[11px]!">2:3</SelectItem></SelectContent>
+                <SelectContent position="popper" align="start" className="min-w-24">{isVideo && <SelectItem value="16:9" className="text-[11px]!">16:9</SelectItem>}<SelectItem value="3:2" className="text-[11px]!">3:2</SelectItem><SelectItem value="1:1" className="text-[11px]!">1:1</SelectItem><SelectItem value="2:3" className="text-[11px]!">2:3</SelectItem>{isVideo && <SelectItem value="9:16" className="text-[11px]!">9:16</SelectItem>}</SelectContent>
               </Select>
-              {isGrok ? (
-                <Select value={settings.resolution} disabled={busy} onValueChange={(value) => onSettingsChange({ resolution: value as ImageSettings["resolution"] })}>
+              {isVideo ? (
+                <>
+                  <Select value={String(settings.duration)} disabled={busy || revisionMode} onValueChange={(value) => onSettingsChange({ duration: Number(value) })}>
+                    <SelectTrigger size="sm" className="h-6 border-transparent bg-muted/45 px-2 text-[10px] text-muted-foreground"><SelectValue /></SelectTrigger>
+                    <SelectContent position="popper"><SelectItem value="5" className="text-[11px]!">5s</SelectItem><SelectItem value="8" className="text-[11px]!">8s</SelectItem><SelectItem value="10" className="text-[11px]!">10s</SelectItem></SelectContent>
+                  </Select>
+                  <Select value={settings.videoResolution} disabled={busy || revisionMode} onValueChange={(value) => onSettingsChange({ videoResolution: value as ImageSettings["videoResolution"] })}>
+                    <SelectTrigger size="sm" className="h-6 border-transparent bg-muted/45 px-2 text-[10px] text-muted-foreground"><SelectValue /></SelectTrigger>
+                  <SelectContent position="popper">{isSeedance ? <><SelectItem value="720p" className="text-[11px]!">720p</SelectItem><SelectItem value="1080p" className="text-[11px]!">1080p</SelectItem></> : <><SelectItem value="480p" className="text-[11px]!">480p</SelectItem><SelectItem value="720p" className="text-[11px]!">720p</SelectItem></>}</SelectContent>
+                  </Select>
+                  {isSeedance ? <Button type="button" size="sm" variant="ghost" disabled={revisionMode} className="h-6 px-2 text-[10px] text-muted-foreground" onClick={() => onSettingsChange({ generateAudio: !settings.generateAudio })}><Volume2 />{settings.generateAudio ? "Audio on" : "Audio off"}</Button> : <Badge variant="ghost" className="h-6 text-[10px] text-muted-foreground"><Volume2 />Audio</Badge>}
+                </>
+              ) : isGrok ? (
+                <Select value={settings.resolution} disabled={busy || revisionMode} onValueChange={(value) => onSettingsChange({ resolution: value as ImageSettings["resolution"] })}>
                   <SelectTrigger size="sm" className="h-6 border-transparent bg-muted/45 px-2 text-[10px] text-muted-foreground hover:text-foreground"><SelectValue /></SelectTrigger>
                   <SelectContent position="popper" align="start" className="min-w-24"><SelectItem value="1k" className="text-[11px]!">1K</SelectItem><SelectItem value="2k" className="text-[11px]!">2K</SelectItem></SelectContent>
                 </Select>
               ) : (
-                <Select value={settings.quality} disabled={busy} onValueChange={(value) => onSettingsChange({ quality: value as ImageSettings["quality"] })}>
+                <Select value={settings.quality} disabled={busy || revisionMode} onValueChange={(value) => onSettingsChange({ quality: value as ImageSettings["quality"] })}>
                   <SelectTrigger size="sm" className="h-6 border-transparent bg-muted/45 px-2 text-[10px] text-muted-foreground hover:text-foreground"><SelectValue /></SelectTrigger>
                   <SelectContent position="popper" align="start" className="min-w-28"><SelectItem value="low" className="text-[11px]!">Low</SelectItem><SelectItem value="medium" className="text-[11px]!">Medium</SelectItem><SelectItem value="high" className="text-[11px]!">High</SelectItem></SelectContent>
                 </Select>

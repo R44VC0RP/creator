@@ -8,16 +8,23 @@ import {
   MAX_ATTACHMENTS_PER_TURN,
   MAX_PEOPLE_PER_TURN,
   DEFAULT_IMAGE_MODEL,
+  DEFAULT_VIDEO_MODEL,
   GROK_IMAGE_MODEL,
+  GROK_VIDEO_MODEL,
   PERSON_COLOR_TOKENS,
   cleanHandle,
   cleanPrompt,
   id,
   now,
   parseAspectRatio,
+  parseGenerationMode,
   parseImageModel,
   parseQuality,
   parseResolution,
+  parseVideoAspectRatio,
+  parseVideoDuration,
+  parseVideoModel,
+  parseVideoResolution,
   stringValue,
   temporaryTitle,
 } from "./lib/values"
@@ -141,11 +148,12 @@ api.get("/conversations", async (c) => {
   ).all<ConversationRow>()
   const conversations = await Promise.all(rows.results.map(async (conversation) => {
     const latestOutput = await c.env.DB.prepare(
-      "SELECT turns.output_asset_id FROM conversation_turn_links JOIN turns ON turns.id = conversation_turn_links.turn_id JOIN assets ON assets.id = turns.output_asset_id WHERE conversation_turn_links.conversation_id = ? AND turns.status = 'succeeded' AND assets.deleted_at IS NULL ORDER BY conversation_turn_links.position DESC LIMIT 1"
-    ).bind(conversation.id).first<{ output_asset_id: string }>()
+      "SELECT assets.id, assets.mime_type, assets.source_asset_id FROM conversation_turn_links JOIN turns ON turns.id = conversation_turn_links.turn_id JOIN assets ON assets.id = turns.output_asset_id WHERE conversation_turn_links.conversation_id = ? AND turns.status = 'succeeded' AND assets.deleted_at IS NULL ORDER BY conversation_turn_links.position DESC LIMIT 1"
+    ).bind(conversation.id).first<{ id: string; mime_type: string; source_asset_id: string | null }>()
+    const previewAssetId = latestOutput?.mime_type === "video/mp4" ? latestOutput.source_asset_id : latestOutput?.id
     return {
       ...conversation,
-      previewSrc: latestOutput ? assetUrl(latestOutput.output_asset_id, "thumbnail") : null,
+      previewSrc: previewAssetId ? assetUrl(previewAssetId, "thumbnail") : null,
     }
   }))
   return c.json({ conversations })
@@ -159,7 +167,7 @@ api.get("/conversations/:id", async (c) => {
     .bind(conversation.id)
     .all<TurnRow & { is_snapshot: number; is_fork_point: number; position: number }>()
   const publicTurns = await Promise.all(turns.results.map(async (turn) => ({
-    ...publicTurn(turn),
+    ...(await publicTurn(c.env, turn)),
     isSnapshot: Boolean(turn.is_snapshot),
     isForkPoint: Boolean(turn.is_fork_point),
     inputs: await publicTurnInputs(c.env, turn.id),
@@ -198,7 +206,7 @@ api.get("/generations/:id", async (c) => {
   if (!isTerminal(turn.status) && turn.replicate_prediction_id) {
     turn = await reconcileTurn(c.env, turn.id)
   }
-  return c.json({ turn: publicTurn(turn) })
+  return c.json({ turn: await publicTurn(c.env, turn) })
 })
 
 api.get("/generations/:id/events", async (c) => {
@@ -216,7 +224,7 @@ api.get("/generations/:id/events", async (c) => {
       }
       if (turn.status !== lastStatus) {
         const event = turn.status === "succeeded" ? "completed" : turn.status === "failed" || turn.status === "canceled" ? turn.status : "status"
-        await stream.writeSSE({ event, data: JSON.stringify(publicTurn(turn)) })
+        await stream.writeSSE({ event, data: JSON.stringify(await publicTurn(c.env, turn)) })
         lastStatus = turn.status
       }
       if (isTerminal(turn.status)) {
@@ -230,7 +238,7 @@ api.get("/generations/:id/events", async (c) => {
 
 api.post("/generations/:id/cancel", async (c) => {
   const turn = await cancelTurn(c.env, c.req.param("id"))
-  return c.json({ turn: publicTurn(turn) })
+  return c.json({ turn: await publicTurn(c.env, turn) })
 })
 
 api.post("/generations/:id/regenerate", async (c) => {
@@ -251,8 +259,8 @@ api.post("/generations/:id/regenerate", async (c) => {
   const inputRows = await loadTurnInputs(c.env, source.id)
   await c.env.DB.batch([
     c.env.DB.prepare(
-      "INSERT INTO turns (id, conversation_id, parent_turn_id, kind, authored_prompt, compiled_prompt, model, aspect_ratio, quality, resolution, output_format, status, created_at) VALUES (?, ?, ?, 'regeneration', ?, ?, ?, ?, ?, ?, 'png', 'queued', ?)"
-    ).bind(turnId, conversationId, source.parent_turn_id, source.authored_prompt, source.compiled_prompt, source.model, source.aspect_ratio, source.quality, source.resolution, timestamp),
+      "INSERT INTO turns (id, conversation_id, parent_turn_id, kind, authored_prompt, compiled_prompt, model, provider, generation_mode, aspect_ratio, quality, resolution, video_resolution, delivery_resolution, video_duration, generate_audio, output_format, status, created_at) VALUES (?, ?, ?, 'regeneration', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)"
+    ).bind(turnId, conversationId, source.parent_turn_id, source.authored_prompt, source.compiled_prompt, source.model, source.provider, source.generation_mode, source.aspect_ratio, source.quality, source.resolution, source.video_resolution, source.delivery_resolution, source.video_duration, source.generate_audio, source.output_format, timestamp),
     ...inputRows.map((input) => c.env.DB.prepare(
       "INSERT INTO turn_inputs (turn_id, asset_id, person_id, role, ordinal) VALUES (?, ?, ?, ?, ?)"
     ).bind(turnId, input.asset_id, input.person_id, input.role, input.ordinal)),
@@ -263,12 +271,68 @@ api.post("/generations/:id/regenerate", async (c) => {
   ])
   const turn = await findTurn(c.env, turnId)
   await submitTurnPrediction(c, turn)
-  return c.json({ turn: publicTurn(await findTurn(c.env, turnId)) }, 202)
+  return c.json({ turn: await publicTurn(c.env, await findTurn(c.env, turnId)) }, 202)
+})
+
+api.post("/turns/:id/revise", async (c) => {
+  const source = await findTurn(c.env, c.req.param("id"))
+  if (!isTerminal(source.status)) {
+    throw new ApiError(409, "TURN_IN_PROGRESS", "A generation still in progress cannot be revised.")
+  }
+  const body = await c.req.json<{ conversationId?: string; prompt?: string }>()
+  const prompt = cleanPrompt(body.prompt ?? null)
+  const visibleConversationId = body.conversationId ?? source.conversation_id
+  const sourceConversation = await requireConversation(c.env, visibleConversationId, true)
+  const sourceLink = await c.env.DB.prepare(
+    "SELECT position FROM conversation_turn_links WHERE conversation_id = ? AND turn_id = ?"
+  ).bind(visibleConversationId, source.id).first<{ position: number }>()
+  if (!sourceLink) {
+    throw new ApiError(409, "TURN_NOT_IN_CONVERSATION", "The selected prompt is not in this conversation.")
+  }
+  const inherited = await c.env.DB.prepare(
+    "SELECT turn_id FROM conversation_turn_links WHERE conversation_id = ? AND position < ? ORDER BY position"
+  ).bind(visibleConversationId, sourceLink.position).all<{ turn_id: string }>()
+  const sourceInputs = await loadTurnInputs(c.env, source.id)
+  const compiledInputs: OrderedInput[] = []
+  for (const input of sourceInputs) {
+    let personHandle: string | undefined
+    if (input.person_id) {
+      const person = await c.env.DB.prepare("SELECT handle FROM people WHERE id = ?")
+        .bind(input.person_id).first<{ handle: string }>()
+      personHandle = person?.handle
+    }
+    compiledInputs.push({ assetId: input.asset_id, role: input.role, personHandle })
+  }
+  const conversationId = id()
+  const turnId = id()
+  const timestamp = now()
+  const compiledPrompt = source.generation_mode === "image" ? compilePrompt(prompt, compiledInputs) : prompt
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      "INSERT INTO conversations (id, title, title_status, forked_from_conversation_id, forked_from_turn_id, created_at, updated_at) VALUES (?, ?, 'generating', ?, ?, ?, ?)"
+    ).bind(conversationId, temporaryTitle(prompt), sourceConversation.id, source.id, timestamp, timestamp),
+    ...inherited.results.map((entry, index) => c.env.DB.prepare(
+      "INSERT INTO conversation_turn_links (conversation_id, turn_id, position, is_snapshot, is_fork_point) VALUES (?, ?, ?, 1, ?)"
+    ).bind(conversationId, entry.turn_id, index, index === inherited.results.length - 1 ? 1 : 0)),
+    c.env.DB.prepare(
+      "INSERT INTO turns (id, conversation_id, parent_turn_id, kind, authored_prompt, compiled_prompt, model, provider, generation_mode, aspect_ratio, quality, resolution, video_resolution, delivery_resolution, video_duration, generate_audio, output_format, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)"
+    ).bind(turnId, conversationId, source.parent_turn_id, source.kind, prompt, compiledPrompt, source.model, source.provider, source.generation_mode, source.aspect_ratio, source.quality, source.resolution, source.video_resolution, source.delivery_resolution, source.video_duration, source.generate_audio, source.output_format, timestamp),
+    ...sourceInputs.map((input) => c.env.DB.prepare(
+      "INSERT INTO turn_inputs (turn_id, asset_id, person_id, role, ordinal) VALUES (?, ?, ?, ?, ?)"
+    ).bind(turnId, input.asset_id, input.person_id, input.role, input.ordinal)),
+    c.env.DB.prepare(
+      "INSERT INTO conversation_turn_links (conversation_id, turn_id, position) VALUES (?, ?, ?)"
+    ).bind(conversationId, turnId, inherited.results.length),
+  ])
+  c.executionCtx.waitUntil(generateConversationTitle(c.env, conversationId, prompt))
+  const turn = await findTurn(c.env, turnId)
+  await submitTurnPrediction(c, turn)
+  return c.json({ conversation: await requireConversation(c.env, conversationId, true), turn: await publicTurn(c.env, await findTurn(c.env, turnId)) }, 202)
 })
 
 api.post("/turns/:id/fork", async (c) => {
   const source = await findTurn(c.env, c.req.param("id"))
-  if (source.status !== "succeeded" || !source.output_asset_id) {
+  if (source.generation_mode !== "image" || source.status !== "succeeded" || !source.output_asset_id) {
     throw new ApiError(409, "TURN_NOT_COMPLETE", "Only completed outputs can be forked.")
   }
   await getAsset(c.env, source.output_asset_id)
@@ -292,13 +356,13 @@ api.post("/turns/:id/fork", async (c) => {
   ])
   const context = await lineageTitleContext(c.env, lineage.results.map((entry) => entry.turn_id))
   c.executionCtx.waitUntil(generateConversationTitle(c.env, conversationId, context))
-  return c.json({ conversation: await requireConversation(c.env, conversationId, true), focusedTurn: publicTurn(source) }, 201)
+  return c.json({ conversation: await requireConversation(c.env, conversationId, true), focusedTurn: await publicTurn(c.env, source) }, 201)
 })
 
 api.get("/gallery", async (c) => {
   const rows = await c.env.DB.prepare(
-    "SELECT assets.*, turns.id AS turn_id, turns.authored_prompt, turns.model, turns.aspect_ratio, turns.quality, turns.resolution, turns.conversation_id, conversations.title AS conversation_title, conversations.deleted_at AS conversation_deleted_at FROM assets JOIN turns ON turns.output_asset_id = assets.id LEFT JOIN conversations ON conversations.id = turns.conversation_id WHERE assets.kind = 'generation_output' AND assets.deleted_at IS NULL AND turns.status = 'succeeded' ORDER BY assets.created_at DESC"
-  ).all<AssetRow & { turn_id: string; authored_prompt: string; model: string; aspect_ratio: string; quality: string; resolution: string | null; conversation_id: string; conversation_title: string | null; conversation_deleted_at: string | null }>()
+    "SELECT assets.*, turns.id AS turn_id, turns.authored_prompt, turns.model, turns.generation_mode, turns.aspect_ratio, turns.quality, turns.resolution, turns.video_resolution, turns.delivery_resolution, turns.video_duration, turns.generate_audio, turns.conversation_id, conversations.title AS conversation_title, conversations.deleted_at AS conversation_deleted_at FROM assets JOIN turns ON turns.output_asset_id = assets.id LEFT JOIN conversations ON conversations.id = turns.conversation_id WHERE assets.kind = 'generation_output' AND assets.deleted_at IS NULL AND turns.status = 'succeeded' ORDER BY assets.created_at DESC"
+  ).all<GalleryAssetRow>()
   return c.json({ gallery: await Promise.all(rows.results.map((asset) => publicGalleryItem(c.env, asset))) })
 })
 
@@ -359,16 +423,29 @@ api.post("/webhooks/replicate", async (c) => {
 async function createGenerationFromRequest(c: Context<App>) {
   const data = await c.req.formData()
   const prompt = cleanPrompt(data.get("prompt"))
-  const aspectRatio = parseAspectRatio(data.get("aspectRatio"))
-  const model = parseImageModel(data.get("model"))
-  if (model === GROK_IMAGE_MODEL && data.has("quality")) {
+  const mode = parseGenerationMode(data.get("mode"))
+  const model = mode === "video" ? parseVideoModel(data.get("model")) : parseImageModel(data.get("model"))
+  const aspectRatio = mode === "video" ? parseVideoAspectRatio(data.get("aspectRatio")) : parseAspectRatio(data.get("aspectRatio"))
+  if (mode === "image" && model === GROK_IMAGE_MODEL && data.has("quality")) {
     throw new ApiError(400, "MODEL_SETTING_UNSUPPORTED", "Quality is only supported for GPT Image 2 generations.")
   }
-  if (model === DEFAULT_IMAGE_MODEL && data.has("resolution")) {
+  if (mode === "image" && model === DEFAULT_IMAGE_MODEL && data.has("resolution")) {
     throw new ApiError(400, "MODEL_SETTING_UNSUPPORTED", "Resolution is only supported for Grok Imagine Quality generations.")
   }
-  const quality = model === DEFAULT_IMAGE_MODEL ? parseQuality(data.get("quality")) : "medium"
-  const resolution = model === GROK_IMAGE_MODEL ? parseResolution(data.get("resolution")) : null
+  const quality = mode === "image" && model === DEFAULT_IMAGE_MODEL ? parseQuality(data.get("quality")) : "medium"
+  const resolution = mode === "image" && model === GROK_IMAGE_MODEL ? parseResolution(data.get("resolution")) : null
+  const videoResolution = mode === "video" ? parseVideoResolution(data.get("videoResolution")) : null
+  const videoDuration = mode === "video" ? parseVideoDuration(data.get("duration")) : null
+  const generateAudio = mode === "video" && model === DEFAULT_VIDEO_MODEL ? data.get("generateAudio") !== "false" : mode === "video" ? true : null
+  if (mode === "video" && model !== DEFAULT_VIDEO_MODEL && data.has("generateAudio")) {
+    throw new ApiError(400, "MODEL_SETTING_UNSUPPORTED", "Audio control is available for Seedance only.")
+  }
+  if (mode === "video" && model === DEFAULT_VIDEO_MODEL && videoResolution === "480p") {
+    throw new ApiError(400, "MODEL_SETTING_UNSUPPORTED", "Seedance Turbo supports 720p or 1080p in this workflow.")
+  }
+  if (mode === "video" && model === GROK_VIDEO_MODEL && videoResolution === "1080p") {
+    throw new ApiError(400, "MODEL_SETTING_UNSUPPORTED", "Grok video supports 480p or 720p.")
+  }
   const requestedPersonIds = [...new Set(data.getAll("personIds").filter((value): value is string => typeof value === "string" && Boolean(value)))]
   if (requestedPersonIds.length > MAX_PEOPLE_PER_TURN) {
     throw new ApiError(400, "TOO_MANY_PEOPLE", `A generation may include up to ${MAX_PEOPLE_PER_TURN} People.`)
@@ -379,13 +456,16 @@ async function createGenerationFromRequest(c: Context<App>) {
   }
   const suppliedConversationId = stringValue(data.get("conversationId"))
   const parentTurnId = stringValue(data.get("parentTurnId"))
-  if (model === GROK_IMAGE_MODEL && requestedPersonIds.length > 0) {
+  if (mode === "video" && (requestedPersonIds.length > 0 || attachments.length > 0)) {
+    throw new ApiError(400, "MODEL_INPUTS_UNSUPPORTED", "Video generations use only the focused image and a text prompt.")
+  }
+  if (mode === "image" && model === GROK_IMAGE_MODEL && requestedPersonIds.length > 0) {
     throw new ApiError(400, "MODEL_INPUTS_UNSUPPORTED", "Grok Imagine Quality does not support People references in this workflow.")
   }
-  if (model === GROK_IMAGE_MODEL && !suppliedConversationId && attachments.length > 1) {
+  if (mode === "image" && model === GROK_IMAGE_MODEL && !suppliedConversationId && attachments.length > 1) {
     throw new ApiError(400, "MODEL_INPUTS_UNSUPPORTED", "A new Grok generation may include one reference image.")
   }
-  if (model === GROK_IMAGE_MODEL && suppliedConversationId && attachments.length > 0) {
+  if (mode === "image" && model === GROK_IMAGE_MODEL && suppliedConversationId && attachments.length > 0) {
     throw new ApiError(400, "MODEL_INPUTS_UNSUPPORTED", "Grok follow-up prompts edit the previous output and cannot include another reference image.")
   }
   const conversationId = suppliedConversationId ?? id()
@@ -394,7 +474,26 @@ async function createGenerationFromRequest(c: Context<App>) {
   let kind: TurnKind = "generation"
   const inputs: OrderedInput[] = []
 
-  if (suppliedConversationId) {
+  if (mode === "video") {
+    if (!suppliedConversationId || !parentTurnId) {
+      throw new ApiError(400, "SOURCE_IMAGE_REQUIRED", "Video generation requires a focused generated image.")
+    }
+    await ensureConversationAvailable(c.env, suppliedConversationId)
+    const parent = await findTurn(c.env, parentTurnId)
+    if (parent.generation_mode !== "image" || parent.status !== "succeeded" || !parent.output_asset_id) {
+      throw new ApiError(409, "SOURCE_IMAGE_REQUIRED", "Video generation requires a completed image output.")
+    }
+    const sourceAsset = await getAsset(c.env, parent.output_asset_id)
+    if (!sourceAsset.mime_type.startsWith("image/")) {
+      throw new ApiError(409, "SOURCE_IMAGE_REQUIRED", "Video generation requires an image source.")
+    }
+    const linked = await c.env.DB.prepare("SELECT turn_id FROM conversation_turn_links WHERE conversation_id = ? AND turn_id = ?")
+      .bind(suppliedConversationId, parent.id).first()
+    if (!linked) {
+      throw new ApiError(409, "PARENT_NOT_IN_CONVERSATION", "The selected image is not in this conversation.")
+    }
+    inputs.push({ assetId: parent.output_asset_id, role: "edit_base" })
+  } else if (suppliedConversationId) {
     await ensureConversationAvailable(c.env, suppliedConversationId)
     if (!parentTurnId) {
       throw new ApiError(400, "PARENT_TURN_REQUIRED", "A prior completed image is required for a modification.")
@@ -416,7 +515,7 @@ async function createGenerationFromRequest(c: Context<App>) {
     kind = "modification"
   }
 
-  const people = await selectedPeople(c.env, requestedPersonIds)
+  const people = mode === "image" ? await selectedPeople(c.env, requestedPersonIds) : []
   for (const person of people) {
     inputs.push({ assetId: person.reference_asset_id, role: "person_reference", personHandle: person.handle })
   }
@@ -437,8 +536,8 @@ async function createGenerationFromRequest(c: Context<App>) {
     ).bind(conversationId, temporaryTitle(prompt), timestamp, timestamp))
   }
   statements.push(c.env.DB.prepare(
-    "INSERT INTO turns (id, conversation_id, parent_turn_id, kind, authored_prompt, compiled_prompt, model, aspect_ratio, quality, resolution, output_format, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'png', 'queued', ?)"
-  ).bind(turnId, conversationId, parentTurnId, kind, prompt, compiledPrompt, model, aspectRatio, quality, resolution, timestamp))
+    "INSERT INTO turns (id, conversation_id, parent_turn_id, kind, authored_prompt, compiled_prompt, model, provider, generation_mode, aspect_ratio, quality, resolution, video_resolution, delivery_resolution, video_duration, generate_audio, output_format, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)"
+  ).bind(turnId, conversationId, parentTurnId, kind, prompt, compiledPrompt, model, mode === "video" && model === DEFAULT_VIDEO_MODEL ? "wavespeed" : "replicate", mode, aspectRatio, quality, resolution, null, videoResolution, videoDuration, generateAudio === null ? null : generateAudio ? 1 : 0, mode === "video" ? "mp4" : "png", timestamp))
   statements.push(c.env.DB.prepare(
     "INSERT INTO conversation_turn_links (conversation_id, turn_id, position) SELECT ?, ?, COALESCE(MAX(position), -1) + 1 FROM conversation_turn_links WHERE conversation_id = ?"
   ).bind(conversationId, turnId, conversationId))
@@ -455,7 +554,7 @@ async function createGenerationFromRequest(c: Context<App>) {
   }
   const turn = await findTurn(c.env, turnId)
   await submitTurnPrediction(c, turn)
-  return c.json({ conversation: await requireConversation(c.env, conversationId, true), turn: publicTurn(await findTurn(c.env, turnId)) }, 202)
+  return c.json({ conversation: await requireConversation(c.env, conversationId, true), turn: await publicTurn(c.env, await findTurn(c.env, turnId)) }, 202)
 }
 
 async function submitTurnPrediction(c: Context<App>, turn: TurnRow) {
@@ -512,18 +611,21 @@ async function activePerson(env: Env, personId: string) {
 
 async function galleryAsset(env: Env, assetId: string) {
   const row = await env.DB.prepare(
-    "SELECT assets.*, turns.id AS turn_id, turns.authored_prompt, turns.model, turns.aspect_ratio, turns.quality, turns.resolution, turns.conversation_id, conversations.title AS conversation_title, conversations.deleted_at AS conversation_deleted_at FROM assets JOIN turns ON turns.output_asset_id = assets.id LEFT JOIN conversations ON conversations.id = turns.conversation_id WHERE assets.id = ? AND assets.kind = 'generation_output' AND assets.deleted_at IS NULL AND turns.status = 'succeeded'"
-  ).bind(assetId).first<AssetRow & { turn_id: string; authored_prompt: string; model: string; aspect_ratio: string; quality: string; resolution: string | null; conversation_id: string; conversation_title: string | null; conversation_deleted_at: string | null }>()
+    "SELECT assets.*, turns.id AS turn_id, turns.authored_prompt, turns.model, turns.generation_mode, turns.aspect_ratio, turns.quality, turns.resolution, turns.video_resolution, turns.delivery_resolution, turns.video_duration, turns.generate_audio, turns.conversation_id, conversations.title AS conversation_title, conversations.deleted_at AS conversation_deleted_at FROM assets JOIN turns ON turns.output_asset_id = assets.id LEFT JOIN conversations ON conversations.id = turns.conversation_id WHERE assets.id = ? AND assets.kind = 'generation_output' AND assets.deleted_at IS NULL AND turns.status = 'succeeded'"
+  ).bind(assetId).first<GalleryAssetRow>()
   if (!row) {
     throw new ApiError(404, "GALLERY_ITEM_NOT_FOUND", "Gallery image not found.")
   }
   return row
 }
 
-async function publicGalleryItem(env: Env, asset: AssetRow & { turn_id: string; authored_prompt: string; model: string; aspect_ratio: string; quality: string; resolution: string | null; conversation_id: string; conversation_title: string | null; conversation_deleted_at: string | null }) {
+type GalleryAssetRow = AssetRow & { turn_id: string; authored_prompt: string; model: string; generation_mode: string; aspect_ratio: string; quality: string; resolution: string | null; video_resolution: string | null; delivery_resolution: string | null; video_duration: number | null; generate_audio: number | null; conversation_id: string; conversation_title: string | null; conversation_deleted_at: string | null }
+
+async function publicGalleryItem(env: Env, asset: GalleryAssetRow) {
   const activeReference = await env.DB.prepare(
     "SELECT conversations.id FROM conversation_turn_links JOIN conversations ON conversations.id = conversation_turn_links.conversation_id JOIN turns ON turns.id = conversation_turn_links.turn_id WHERE turns.output_asset_id = ? AND conversations.deleted_at IS NULL LIMIT 1"
   ).bind(asset.id).first()
+  const posterAssetId = asset.mime_type === "video/mp4" ? asset.source_asset_id : asset.id
   return {
     assetId: asset.id,
     turnId: asset.turn_id,
@@ -532,12 +634,17 @@ async function publicGalleryItem(env: Env, asset: AssetRow & { turn_id: string; 
     conversationDeleted: Boolean(asset.conversation_deleted_at),
     prompt: asset.authored_prompt,
     model: asset.model,
+    mode: asset.generation_mode,
     aspectRatio: asset.aspect_ratio,
     quality: asset.model === DEFAULT_IMAGE_MODEL ? asset.quality : null,
     resolution: asset.model === GROK_IMAGE_MODEL ? asset.resolution : null,
+    videoResolution: asset.delivery_resolution ?? asset.video_resolution,
+    duration: asset.video_duration,
+    generateAudio: asset.generate_audio === null ? null : Boolean(asset.generate_audio),
     createdAt: asset.created_at,
-    thumbnailSrc: assetUrl(asset.id, "thumbnail"),
-    previewSrc: assetUrl(asset.id, "preview"),
+    thumbnailSrc: posterAssetId ? assetUrl(posterAssetId, "thumbnail") : null,
+    previewSrc: posterAssetId ? assetUrl(posterAssetId, "preview") : null,
+    contentSrc: assetUrl(asset.id),
     downloadSrc: downloadableAssetUrl(asset.id),
     mayDelete: !activeReference,
     mayFork: true,
@@ -548,12 +655,20 @@ function publicPerson(person: PersonRow) {
   return { ...person, imageSrc: assetUrl(person.reference_asset_id, "thumbnail") }
 }
 
-function publicTurn(turn: TurnRow) {
+async function publicTurn(env: Env, turn: TurnRow) {
+  let posterAssetId = turn.output_asset_id
+  if (turn.generation_mode === "video") {
+    const source = await env.DB.prepare("SELECT asset_id FROM turn_inputs WHERE turn_id = ? AND role = 'edit_base' ORDER BY ordinal LIMIT 1")
+      .bind(turn.id).first<{ asset_id: string }>()
+    posterAssetId = source?.asset_id ?? null
+  }
   return {
     ...turn,
     quality: turn.model === DEFAULT_IMAGE_MODEL ? turn.quality : null,
     resolution: turn.model === GROK_IMAGE_MODEL ? turn.resolution : null,
-    previewSrc: turn.output_asset_id ? assetUrl(turn.output_asset_id, "preview") : null,
+    video_resolution: turn.delivery_resolution ?? turn.video_resolution,
+    previewSrc: posterAssetId ? assetUrl(posterAssetId, "preview") : null,
+    contentSrc: turn.output_asset_id ? assetUrl(turn.output_asset_id) : null,
     downloadSrc: turn.output_asset_id ? downloadableAssetUrl(turn.output_asset_id) : null,
   }
 }

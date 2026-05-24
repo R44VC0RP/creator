@@ -96,6 +96,28 @@ export async function storeGeneratedOutput(env: Env, turnId: string, conversatio
   return assetId
 }
 
+export async function storeGeneratedVideo(env: Env, turnId: string, conversationId: string, response: Response, sourceAssetId: string) {
+  if (!response.ok || !response.body) {
+    throw new ApiError(502, "OUTPUT_DOWNLOAD_FAILED", "Replicate video output could not be downloaded.")
+  }
+
+  const bytes = await response.arrayBuffer()
+  const assetId = `output-${turnId}`
+  const r2Key = `generations/${conversationId}/${turnId}/${assetId}.mp4`
+  const createdAt = now()
+
+  await env.MEDIA.put(r2Key, bytes, { httpMetadata: { contentType: "video/mp4" } })
+  try {
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO assets (id, kind, r2_key, mime_type, byte_size, source_asset_id, created_at) VALUES (?, 'generation_output', ?, 'video/mp4', ?, ?, ?)"
+    ).bind(assetId, r2Key, bytes.byteLength, sourceAssetId, createdAt).run()
+  } catch (error) {
+    await env.MEDIA.delete(r2Key)
+    throw error
+  }
+  return assetId
+}
+
 export async function assetBlob(env: Env, assetId: string) {
   const asset = await getAsset(env, assetId)
   const object = await env.MEDIA.get(asset.r2_key!)
@@ -113,7 +135,14 @@ export async function serveAsset(env: Env, asset: AssetRow, variant: string | nu
 
   const headers = new Headers()
   headers.set("Cache-Control", download ? "private, max-age=0" : "private, max-age=3600")
-  headers.set("Content-Disposition", download ? `attachment; filename="${asset.id}.${asset.mime_type === "image/png" ? "png" : "webp"}"` : "inline")
+  const extension = asset.mime_type === "video/mp4" ? "mp4" : asset.mime_type === "image/png" ? "png" : "webp"
+  headers.set("Content-Disposition", download ? `attachment; filename="${asset.id}.${extension}"` : "inline")
+
+  if (asset.mime_type === "video/mp4") {
+    if (variant) throw new ApiError(400, "INVALID_ASSET_VARIANT", "Video assets cannot be transformed as images.")
+    headers.set("Content-Type", asset.mime_type)
+    return new Response(object.body, { headers })
+  }
 
   if (!variant) {
     headers.set("Content-Type", asset.mime_type)

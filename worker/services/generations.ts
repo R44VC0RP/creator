@@ -2,8 +2,8 @@ import type { Prediction } from "replicate"
 
 import type { Env, InputRole, TurnInputRow, TurnRow, TurnStatus } from "../types"
 import { ApiError } from "../lib/errors"
-import { GROK_IMAGE_MODEL, now } from "../lib/values"
-import { assetBlob, storeGeneratedOutput } from "./assets"
+import { GROK_IMAGE_MODEL, GROK_VIDEO_MODEL, LEGACY_REPLICATE_SEEDANCE_MODEL, now } from "../lib/values"
+import { assetBlob, storeGeneratedOutput, storeGeneratedVideo } from "./assets"
 
 export type OrderedInput = {
   assetId: string
@@ -16,6 +16,13 @@ function requireReplicateToken(env: Env) {
     throw new ApiError(503, "REPLICATE_NOT_CONFIGURED", "Replicate is not configured on this server.")
   }
   return env.REPLICATE_API_TOKEN
+}
+
+function requireWaveSpeedToken(env: Env) {
+  if (!env.WAVESPEED_API_KEY) {
+    throw new ApiError(503, "WAVESPEED_NOT_CONFIGURED", "WaveSpeed is not configured on this server.")
+  }
+  return env.WAVESPEED_API_KEY
 }
 
 async function replicateRequest(env: Env, path: string, init?: RequestInit) {
@@ -32,7 +39,8 @@ async function replicateRequest(env: Env, path: string, init?: RequestInit) {
 
 async function uploadInputFile(env: Env, blob: Blob, metadata: Record<string, string>) {
   const form = new FormData()
-  form.append("content", blob, `reference-${crypto.randomUUID()}.webp`)
+  const extension = blob.type === "image/png" ? "png" : blob.type === "image/jpeg" ? "jpg" : "webp"
+  form.append("content", blob, `reference-${crypto.randomUUID()}.${extension}`)
   form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }))
   const response = await replicateRequest(env, "/files", { method: "POST", body: form })
   return response.json() as Promise<{ urls: { get: string } }>
@@ -46,6 +54,60 @@ async function getPrediction(env: Env, predictionId: string) {
 async function cancelPrediction(env: Env, predictionId: string) {
   const response = await replicateRequest(env, `/predictions/${encodeURIComponent(predictionId)}/cancel`, { method: "POST" })
   return response.json() as Promise<Prediction>
+}
+
+type WaveSpeedPrediction = {
+  id: string
+  status: "created" | "processing" | "completed" | "failed"
+  outputs?: string[]
+  error?: string
+}
+
+async function waveSpeedRequest(env: Env, path: string, init?: RequestInit) {
+  const headers = new Headers(init?.headers)
+  headers.set("Authorization", `Bearer ${requireWaveSpeedToken(env)}`)
+  const response = await fetch(`https://api.wavespeed.ai/api/v3${path}`, { ...init, headers })
+  if (!response.ok) {
+    const detail = await response.text()
+    throw new ApiError(502, "WAVESPEED_REQUEST_FAILED", detail || "WaveSpeed request failed.")
+  }
+  const payload = await response.json() as { data?: WaveSpeedPrediction; message?: string }
+  if (!payload.data) throw new ApiError(502, "WAVESPEED_REQUEST_FAILED", payload.message || "WaveSpeed response was invalid.")
+  return payload.data
+}
+
+async function uploadWaveSpeedSource(env: Env, blob: Blob) {
+  const extension = blob.type === "image/png" ? "png" : blob.type === "image/jpeg" ? "jpg" : "webp"
+  const form = new FormData()
+  form.append("file", blob, `source-${crypto.randomUUID()}.${extension}`)
+  const response = await fetch("https://api.wavespeed.ai/api/v3/media/upload/binary", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${requireWaveSpeedToken(env)}` },
+    body: form,
+  })
+  if (!response.ok) throw new ApiError(502, "WAVESPEED_UPLOAD_FAILED", "WaveSpeed could not accept the source image.")
+  const payload = await response.json() as { data?: { download_url?: string } }
+  if (!payload.data?.download_url) throw new ApiError(502, "WAVESPEED_UPLOAD_FAILED", "WaveSpeed did not return an image URL.")
+  return payload.data.download_url
+}
+
+async function createWaveSpeedSeedancePrediction(env: Env, turn: TurnRow) {
+  const input = (await loadTurnInputs(env, turn.id))[0]
+  if (!input) throw new ApiError(409, "REFERENCE_ASSET_MISSING", "Seedance requires a source image.")
+  const sourceUrl = await uploadWaveSpeedSource(env, await assetBlob(env, input.asset_id))
+  return waveSpeedRequest(env, "/bytedance/seedance-2.0/image-to-video-turbo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prompt: turn.authored_prompt,
+      image: sourceUrl,
+      duration: turn.video_duration ?? 5,
+      resolution: videoResolution(turn),
+      aspect_ratio: turn.aspect_ratio,
+      enable_web_search: false,
+      generate_audio: turn.generate_audio !== 0,
+    }),
+  })
 }
 
 export function compilePrompt(authoredPrompt: string, inputs: OrderedInput[]) {
@@ -105,6 +167,16 @@ export async function recordGenerationEvent(env: Env, turnId: string, eventType:
 }
 
 export async function createPrediction(env: Env, turn: TurnRow, webhookUrl?: string) {
+  if (turn.provider === "wavespeed") {
+    const prediction = await createWaveSpeedSeedancePrediction(env, turn)
+    const status = prediction.status === "completed" ? "processing" : prediction.status === "failed" ? "failed" : "processing"
+    const errorMessage = prediction.status === "failed" ? friendlyPredictionError(prediction.error, turn.generation_mode) : null
+    await env.DB.prepare("UPDATE turns SET replicate_prediction_id = ?, status = ?, error_message = ?, completed_at = ? WHERE id = ?")
+      .bind(prediction.id, status, errorMessage, prediction.status === "failed" ? now() : null, turn.id).run()
+    await recordGenerationEvent(env, turn.id, prediction.status === "failed" ? "failed" : "status", { status, message: errorMessage })
+    if (prediction.status === "completed") await reconcileTurn(env, turn.id)
+    return prediction as unknown as Prediction
+  }
   requireReplicateToken(env)
   const storedInputs = await loadTurnInputs(env, turn.id)
   const inputUrls: string[] = []
@@ -128,7 +200,24 @@ export async function createPrediction(env: Env, turn: TurnRow, webhookUrl?: str
         aspect_ratio: turn.aspect_ratio,
         resolution: turn.resolution ?? "2k",
       }
-    : {
+    : turn.generation_mode === "video" && turn.model === LEGACY_REPLICATE_SEEDANCE_MODEL
+      ? {
+          prompt: turn.authored_prompt,
+          image: inputUrls[0],
+          duration: turn.video_duration ?? 5,
+          resolution: videoResolution(turn),
+          aspect_ratio: turn.aspect_ratio,
+          generate_audio: turn.generate_audio !== 0,
+        }
+      : turn.generation_mode === "video" && turn.model === GROK_VIDEO_MODEL
+        ? {
+            prompt: turn.authored_prompt,
+            image: inputUrls[0],
+            duration: turn.video_duration ?? 5,
+            resolution: videoResolution(turn),
+            aspect_ratio: turn.aspect_ratio,
+          }
+        : {
         prompt: turn.compiled_prompt,
         input_images: inputUrls,
         aspect_ratio: turn.aspect_ratio,
@@ -169,6 +258,25 @@ export async function reconcileTurn(env: Env, turnId: string, suppliedPrediction
     return turn
   }
 
+  if (turn.provider === "wavespeed") {
+    const prediction = await waveSpeedRequest(env, `/predictions/${encodeURIComponent(turn.replicate_prediction_id)}/result`)
+    if (prediction.status === "failed") {
+      const message = friendlyPredictionError(prediction.error, turn.generation_mode)
+      await env.DB.prepare("UPDATE turns SET status = 'failed', error_message = ?, completed_at = ? WHERE id = ? AND status NOT IN ('succeeded', 'failed', 'canceled')").bind(message, now(), turn.id).run()
+      return findTurn(env, turn.id)
+    }
+    if (prediction.status !== "completed") return turn
+    const claimed = await env.DB.prepare("UPDATE turns SET status = 'persisting' WHERE id = ? AND status NOT IN ('succeeded', 'failed', 'canceled')").bind(turn.id).run()
+    if (claimed.meta.changes === 0) return findTurn(env, turn.id)
+    const outputUrl = prediction.outputs?.[0]
+    if (!outputUrl) throw new ApiError(502, "INVALID_MODEL_OUTPUT", "WaveSpeed did not return a video output URL.")
+    const sourceInput = (await loadTurnInputs(env, turn.id))[0]
+    const assetId = await storeGeneratedVideo(env, turn.id, turn.conversation_id, await fetch(outputUrl), sourceInput.asset_id)
+    await env.DB.prepare("UPDATE turns SET status = 'succeeded', output_asset_id = ?, completed_at = ?, error_message = NULL WHERE id = ?").bind(assetId, now(), turn.id).run()
+    await recordGenerationEvent(env, turn.id, "completed", { status: "succeeded", assetId })
+    return findTurn(env, turn.id)
+  }
+
   const prediction = suppliedPrediction ?? (await getPrediction(env, turn.replicate_prediction_id))
   if (prediction.id !== turn.replicate_prediction_id) {
     throw new ApiError(409, "PREDICTION_MISMATCH", "Replicate prediction does not match this generation.")
@@ -176,7 +284,7 @@ export async function reconcileTurn(env: Env, turnId: string, suppliedPrediction
 
   if (prediction.status === "failed" || prediction.status === "canceled" || prediction.status === "aborted") {
     const status: TurnStatus = prediction.status === "failed" ? "failed" : "canceled"
-    const message = prediction.status === "failed" ? String(prediction.error ?? "Generation failed.") : null
+    const message = prediction.status === "failed" ? friendlyPredictionError(prediction.error, turn.generation_mode) : null
     await env.DB.prepare("UPDATE turns SET status = ?, error_message = ?, completed_at = ? WHERE id = ? AND status NOT IN ('succeeded', 'failed', 'canceled')")
       .bind(status, message, now(), turn.id)
       .run()
@@ -206,7 +314,10 @@ export async function reconcileTurn(env: Env, turnId: string, suppliedPrediction
   try {
     const outputUrl = firstOutputUrl(prediction.output)
     const response = await fetch(outputUrl, { headers: { Authorization: `Bearer ${env.REPLICATE_API_TOKEN}` } })
-    const assetId = await storeGeneratedOutput(env, turn.id, turn.conversation_id, response, turn.model === GROK_IMAGE_MODEL)
+    const sourceInput = (await loadTurnInputs(env, turn.id))[0]
+    const assetId = turn.generation_mode === "video"
+      ? await storeGeneratedVideo(env, turn.id, turn.conversation_id, response, sourceInput.asset_id)
+      : await storeGeneratedOutput(env, turn.id, turn.conversation_id, response, turn.model === GROK_IMAGE_MODEL)
     await env.DB.prepare("UPDATE turns SET status = 'succeeded', output_asset_id = ?, completed_at = ?, error_message = NULL WHERE id = ?")
       .bind(assetId, now(), turn.id)
       .run()
@@ -227,8 +338,11 @@ export async function cancelTurn(env: Env, turnId: string) {
   if (isTerminal(turn.status)) {
     return turn
   }
+  if (turn.provider === "wavespeed") {
+    throw new ApiError(409, "CANCEL_NOT_SUPPORTED", "WaveSpeed Seedance tasks cannot be canceled through the documented API.")
+  }
   if (turn.replicate_prediction_id) {
-    await cancelPrediction(env, turn.replicate_prediction_id)
+    if (turn.provider === "replicate") await cancelPrediction(env, turn.replicate_prediction_id)
   }
   await env.DB.prepare("UPDATE turns SET status = 'canceled', completed_at = ? WHERE id = ?")
     .bind(now(), turnId)
@@ -255,6 +369,21 @@ function mapStatus(status: Prediction["status"]): TurnStatus {
 
 export function isTerminal(status: TurnStatus) {
   return status === "succeeded" || status === "failed" || status === "canceled"
+}
+
+function friendlyPredictionError(error: unknown, mode: TurnRow["generation_mode"]) {
+  const raw = typeof error === "string" ? error : JSON.stringify(error ?? "")
+  if (/sensitive|flagged|E005/i.test(raw)) {
+    return "This prompt or source image was flagged by the safety filter. Try a different prompt or starting image."
+  }
+  if (/invalid image format/i.test(raw)) {
+    return "The source image could not be used for this generation. Try generating again or choose another image."
+  }
+  return mode === "video" ? "Video generation failed. Try a different motion prompt or source image." : "Image generation failed. Try changing the prompt or references."
+}
+
+function videoResolution(turn: TurnRow) {
+  return turn.delivery_resolution ?? turn.video_resolution ?? "720p"
 }
 
 function firstOutputUrl(output: unknown) {

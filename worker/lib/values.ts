@@ -1,9 +1,12 @@
 import { ApiError } from "./errors"
 
-import type { ImageModel } from "../types"
+import type { GenerationMode, ImageModel, VideoModel } from "../types"
 
 export const DEFAULT_IMAGE_MODEL: ImageModel = "openai/gpt-image-2"
 export const GROK_IMAGE_MODEL: ImageModel = "xai/grok-imagine-image-quality"
+export const LEGACY_REPLICATE_SEEDANCE_MODEL: VideoModel = "bytedance/seedance-2.0"
+export const DEFAULT_VIDEO_MODEL: VideoModel = "bytedance/seedance-2.0/image-to-video-turbo"
+export const GROK_VIDEO_MODEL: VideoModel = "xai/grok-imagine-video"
 export const MAX_PEOPLE_PER_TURN = 4
 export const MAX_ATTACHMENTS_PER_TURN = 2
 export const PERSON_COLOR_TOKENS = [
@@ -73,6 +76,47 @@ export function parseResolution(value: FormDataEntryValue | null): "1k" | "2k" {
     throw new ApiError(400, "INVALID_RESOLUTION", "Unsupported Grok resolution.")
   }
   return value
+}
+
+export function parseGenerationMode(value: FormDataEntryValue | null): GenerationMode {
+  if (value === null || value === "") return "image"
+  if (value !== "image" && value !== "video") {
+    throw new ApiError(400, "INVALID_MODE", "Unsupported generation mode.")
+  }
+  return value
+}
+
+export function parseVideoModel(value: FormDataEntryValue | null): VideoModel {
+  if (value === null || value === "") return DEFAULT_VIDEO_MODEL
+  if (value !== DEFAULT_VIDEO_MODEL && value !== GROK_VIDEO_MODEL) {
+    throw new ApiError(400, "INVALID_MODEL", "Unsupported video model.")
+  }
+  return value
+}
+
+export function parseVideoResolution(value: FormDataEntryValue | null): "480p" | "720p" | "1080p" {
+  if (value === null || value === "") return "720p"
+  if (value !== "480p" && value !== "720p" && value !== "1080p") {
+    throw new ApiError(400, "INVALID_VIDEO_RESOLUTION", "Unsupported video resolution.")
+  }
+  return value
+}
+
+export function parseVideoDuration(value: FormDataEntryValue | null) {
+  const duration = value === null || value === "" ? 5 : Number(value)
+  if (!Number.isInteger(duration) || duration < 1 || duration > 15) {
+    throw new ApiError(400, "INVALID_VIDEO_DURATION", "Video duration must be between 1 and 15 seconds.")
+  }
+  return duration
+}
+
+export function parseVideoAspectRatio(value: FormDataEntryValue | null) {
+  const ratio = typeof value === "string" && value ? value : "16:9"
+  const supported = ["16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "1:1", "21:9", "adaptive"]
+  if (!supported.includes(ratio)) {
+    throw new ApiError(400, "INVALID_ASPECT_RATIO", "Unsupported video aspect ratio.")
+  }
+  return ratio
 }
 
 export function temporaryTitle(prompt: string) {
