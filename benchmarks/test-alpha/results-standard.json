@@ -1,0 +1,45 @@
+{
+  "prompt": "The man in the reference image starts dancing around playfully in his room, doing upbeat side steps and arm movements while keeping his face, clothing, and room recognizable. Natural handheld camera feel, realistic motion, joyful energy.",
+  "referenceFile": "base.jpeg",
+  "referenceUrl": "https://d1q70p.cachecloud.net/media/004d56ae7e684a2e96014bbc907f71cb/images/1780072930628435711_vTP8qyTa.jpeg",
+  "results": [
+    {
+      "label": "Seedance 2.0 Image-to-Video",
+      "model": "bytedance/seedance-2.0/image-to-video",
+      "input": {
+        "prompt": "The man in the reference image starts dancing around playfully in his room, doing upbeat side steps and arm movements while keeping his face, clothing, and room recognizable. Natural handheld camera feel, realistic motion, joyful energy.",
+        "aspect_ratio": "16:9",
+        "resolution": "720p",
+        "duration": 10,
+        "enable_web_search": false,
+        "generate_audio": true,
+        "image": "https://d1q70p.cachecloud.net/media/004d56ae7e684a2e96014bbc907f71cb/images/1780072930628435711_vTP8qyTa.jpeg"
+      },
+      "status": "succeeded",
+      "predictionId": "bd3e67db3cbd4f2799a52be78bb12033",
+      "outputUrl": "https://d2p7pg.cachecloud.net/output/d4617849-e6fb-44a8-b1c1-2e8bf313a94c.mp4",
+      "outputFile": "image-to-video.mp4",
+      "elapsedMs": 366489
+    },
+    {
+      "label": "Seedance 2.0 Text-to-Video with reference image",
+      "model": "bytedance/seedance-2.0/text-to-video",
+      "input": {
+        "prompt": "The man in the reference image starts dancing around playfully in his room, doing upbeat side steps and arm movements while keeping his face, clothing, and room recognizable. Natural handheld camera feel, realistic motion, joyful energy.",
+        "aspect_ratio": "16:9",
+        "resolution": "720p",
+        "duration": 10,
+        "enable_web_search": false,
+        "generate_audio": true,
+        "reference_images": [
+          "https://d1q70p.cachecloud.net/media/004d56ae7e684a2e96014bbc907f71cb/images/1780072930628435711_vTP8qyTa.jpeg"
+        ]
+      },
+      "status": "succeeded",
+      "predictionId": "545d0581ed4d4cc7af037c4643b02b05",
+      "outputUrl": "https://d2p7pg.cachecloud.net/output/20421720-6074-4487-9562-cd81f5ff2951.mp4",
+      "outputFile": "text-to-video.mp4",
+      "elapsedMs": 201411
+    }
+  ]
+}

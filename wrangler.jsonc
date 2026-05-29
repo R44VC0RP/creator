@@ -3,6 +3,12 @@
 	"name": "creator-generator-app-prod",
 	"compatibility_date": "2026-05-23",
 	"main": "./worker/index.ts",
+	"routes": [
+		{
+			"pattern": "creator.anoma.ly",
+			"custom_domain": true
+		}
+	],
 	"assets": {
 		"binding": "ASSETS",
 		"not_found_handling": "single-page-application",
