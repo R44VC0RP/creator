@@ -20,6 +20,8 @@ export type ImageModel = "openai/gpt-image-2" | "xai/grok-imagine-image-quality"
 export type VideoModel =
   | "bytedance/seedance-2.0"
   | "bytedance/seedance-2.0/image-to-video-turbo"
+  | "bytedance/seedance-2.0/text-to-video"
+  | "kwaivgi/kling-video-o3-pro/image-to-video"
   | "xai/grok-imagine-video"
 export type GenerationModel = ImageModel | VideoModel
 export type GenerationMode = "image" | "video"

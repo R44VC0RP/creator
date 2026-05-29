@@ -19,6 +19,7 @@ import {
   DEFAULT_VIDEO_MODEL,
   GROK_IMAGE_MODEL,
   GROK_VIDEO_MODEL,
+  KLING_VIDEO_MODEL,
   PERSON_COLOR_TOKENS,
   cleanHandle,
   cleanPrompt,
@@ -431,10 +432,18 @@ api.post("/generations/:id/regenerate", async (c) => {
   const turnId = id()
   const timestamp = now()
   const inputRows = await loadTurnInputs(c.env, source.id)
+  const migrateToCurrentProvider =
+    source.generation_mode === "image" ||
+    (source.generation_mode === "video" &&
+      source.model !== GROK_VIDEO_MODEL &&
+      source.model !== KLING_VIDEO_MODEL)
   const model =
-    source.generation_mode === "image" ? DEFAULT_IMAGE_MODEL : source.model
-  const provider =
-    source.generation_mode === "image" ? "wavespeed" : source.provider
+    source.generation_mode === "image"
+      ? DEFAULT_IMAGE_MODEL
+      : migrateToCurrentProvider
+        ? DEFAULT_VIDEO_MODEL
+        : source.model
+  const provider = migrateToCurrentProvider ? "wavespeed" : source.provider
   await c.env.DB.batch([
     c.env.DB.prepare(
       "INSERT INTO turns (id, conversation_id, parent_turn_id, kind, authored_prompt, compiled_prompt, model, provider, generation_mode, aspect_ratio, quality, resolution, video_resolution, delivery_resolution, video_duration, generate_audio, output_format, status, created_at) VALUES (?, ?, ?, 'regeneration', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)"
@@ -538,10 +547,18 @@ api.post("/turns/:id/revise", async (c) => {
     source.generation_mode === "image"
       ? compilePrompt(prompt, compiledInputs)
       : prompt
+  const migrateToCurrentProvider =
+    source.generation_mode === "image" ||
+    (source.generation_mode === "video" &&
+      source.model !== GROK_VIDEO_MODEL &&
+      source.model !== KLING_VIDEO_MODEL)
   const model =
-    source.generation_mode === "image" ? DEFAULT_IMAGE_MODEL : source.model
-  const provider =
-    source.generation_mode === "image" ? "wavespeed" : source.provider
+    source.generation_mode === "image"
+      ? DEFAULT_IMAGE_MODEL
+      : migrateToCurrentProvider
+        ? DEFAULT_VIDEO_MODEL
+        : source.model
+  const provider = migrateToCurrentProvider ? "wavespeed" : source.provider
   await c.env.DB.batch([
     c.env.DB.prepare(
       "INSERT INTO conversations (id, title, title_status, forked_from_conversation_id, forked_from_turn_id, created_at, updated_at) VALUES (?, ?, 'generating', ?, ?, ?, ?)"
@@ -788,33 +805,37 @@ async function createGenerationFromRequest(c: Context<App>) {
       ? parseVideoModel(data.get("model"))
       : parseImageModel(data.get("model"))
   const aspectRatio =
-    mode === "video"
-      ? parseVideoAspectRatio(data.get("aspectRatio"))
-      : parseAspectRatio(data.get("aspectRatio"))
+    mode === "video" && model === KLING_VIDEO_MODEL
+      ? "adaptive"
+      : mode === "video"
+        ? parseVideoAspectRatio(data.get("aspectRatio"))
+        : parseAspectRatio(data.get("aspectRatio"))
   const quality =
     mode === "image" && model === DEFAULT_IMAGE_MODEL
       ? parseQuality(data.get("quality"))
       : "medium"
   const resolution = null
   const videoResolution =
-    mode === "video" ? parseVideoResolution(data.get("videoResolution")) : null
+    mode === "video" && model !== KLING_VIDEO_MODEL
+      ? parseVideoResolution(data.get("videoResolution"))
+      : null
   const videoDuration =
     mode === "video" ? parseVideoDuration(data.get("duration")) : null
   const generateAudio =
-    mode === "video" && model === DEFAULT_VIDEO_MODEL
+    mode === "video" && model !== GROK_VIDEO_MODEL
       ? data.get("generateAudio") !== "false"
       : mode === "video"
         ? true
         : null
   if (
     mode === "video" &&
-    model !== DEFAULT_VIDEO_MODEL &&
+    model === GROK_VIDEO_MODEL &&
     data.has("generateAudio")
   ) {
     throw new ApiError(
       400,
       "MODEL_SETTING_UNSUPPORTED",
-      "Audio control is available for Seedance only."
+      "Audio control is available for Seedance and Kling only."
     )
   }
   if (
@@ -825,7 +846,7 @@ async function createGenerationFromRequest(c: Context<App>) {
     throw new ApiError(
       400,
       "MODEL_SETTING_UNSUPPORTED",
-      "Seedance Turbo supports 720p or 1080p in this workflow."
+      "Seedance supports 720p or 1080p in this workflow."
     )
   }
   if (
@@ -837,6 +858,18 @@ async function createGenerationFromRequest(c: Context<App>) {
       400,
       "MODEL_SETTING_UNSUPPORTED",
       "Grok video supports 480p or 720p."
+    )
+  }
+  if (
+    mode === "video" &&
+    model === KLING_VIDEO_MODEL &&
+    videoDuration !== 5 &&
+    videoDuration !== 10
+  ) {
+    throw new ApiError(
+      400,
+      "MODEL_SETTING_UNSUPPORTED",
+      "Kling O3 Pro supports 5 or 10 second videos."
     )
   }
   const requestedPersonIds = [
@@ -1009,7 +1042,7 @@ async function createGenerationFromRequest(c: Context<App>) {
       compiledPrompt,
       model,
       (mode === "image" && model === DEFAULT_IMAGE_MODEL) ||
-        (mode === "video" && model === DEFAULT_VIDEO_MODEL)
+        (mode === "video" && model !== GROK_VIDEO_MODEL)
         ? "wavespeed"
         : "replicate",
       mode,

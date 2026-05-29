@@ -10,6 +10,8 @@ export type ImageModel = "openai/gpt-image-2" | "xai/grok-imagine-image-quality"
 export type VideoModel =
   | "bytedance/seedance-2.0"
   | "bytedance/seedance-2.0/image-to-video-turbo"
+  | "bytedance/seedance-2.0/text-to-video"
+  | "kwaivgi/kling-video-o3-pro/image-to-video"
   | "xai/grok-imagine-video"
 export type GenerationModel = ImageModel | VideoModel
 export type GenerationMode = "image" | "video"
@@ -288,9 +290,13 @@ export async function createGeneration(draft: GenerationDraft) {
   body.set("model", draft.model)
   body.set("aspectRatio", draft.aspectRatio)
   if (draft.mode === "video") {
-    body.set("videoResolution", draft.videoResolution ?? "720p")
+    if (draft.model !== "kwaivgi/kling-video-o3-pro/image-to-video")
+      body.set("videoResolution", draft.videoResolution ?? "720p")
     body.set("duration", String(draft.duration ?? 5))
-    if (draft.model === "bytedance/seedance-2.0/image-to-video-turbo")
+    if (
+      draft.model === "bytedance/seedance-2.0/text-to-video" ||
+      draft.model === "kwaivgi/kling-video-o3-pro/image-to-video"
+    )
       body.set("generateAudio", String(draft.generateAudio !== false))
   } else if (draft.model === "openai/gpt-image-2") {
     body.set("quality", draft.quality ?? "medium")

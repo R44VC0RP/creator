@@ -126,7 +126,8 @@ type ImageSettings = {
   mode: "image" | "video"
   model: "openai/gpt-image-2"
   videoModel:
-    | "bytedance/seedance-2.0/image-to-video-turbo"
+    | "bytedance/seedance-2.0/text-to-video"
+    | "kwaivgi/kling-video-o3-pro/image-to-video"
     | "xai/grok-imagine-video"
   aspectRatio: "1:1" | "3:2" | "2:3" | "16:9"
   quality: "low" | "medium" | "high"
@@ -164,7 +165,7 @@ function loadSettings(): ImageSettings {
   const fallback: ImageSettings = {
     mode: "image",
     model: "openai/gpt-image-2",
-    videoModel: "bytedance/seedance-2.0/image-to-video-turbo",
+    videoModel: "bytedance/seedance-2.0/text-to-video",
     aspectRatio: "3:2",
     quality: "medium",
     videoAspectRatio: "16:9",
@@ -180,10 +181,12 @@ function loadSettings(): ImageSettings {
       "videoModel"
     > & { videoModel?: string }
     const videoModel: ImageSettings["videoModel"] | undefined =
-      savedValue.videoModel === "bytedance/seedance-2.0"
-        ? "bytedance/seedance-2.0/image-to-video-turbo"
-        : savedValue.videoModel ===
-              "bytedance/seedance-2.0/image-to-video-turbo" ||
+      savedValue.videoModel === "bytedance/seedance-2.0" ||
+      savedValue.videoModel === "bytedance/seedance-2.0/image-to-video-turbo"
+        ? "bytedance/seedance-2.0/text-to-video"
+        : savedValue.videoModel === "bytedance/seedance-2.0/text-to-video" ||
+            savedValue.videoModel ===
+              "kwaivgi/kling-video-o3-pro/image-to-video" ||
             savedValue.videoModel === "xai/grok-imagine-video"
           ? savedValue.videoModel
           : undefined
@@ -228,9 +231,11 @@ function failureMessage(turn: Turn) {
 function modelName(model: GenerationModel) {
   if (
     model === "bytedance/seedance-2.0" ||
-    model === "bytedance/seedance-2.0/image-to-video-turbo"
+    model === "bytedance/seedance-2.0/image-to-video-turbo" ||
+    model === "bytedance/seedance-2.0/text-to-video"
   )
     return "Seedance"
+  if (model === "kwaivgi/kling-video-o3-pro/image-to-video") return "Kling"
   if (model === "xai/grok-imagine-video") return "Grok"
   return model === "xai/grok-imagine-image-quality" ? "Grok" : "GPT"
 }
@@ -248,9 +253,21 @@ function generationEstimateSeconds(turn: Turn) {
   }
   if (
     turn.provider === "wavespeed" &&
+    turn.model === "bytedance/seedance-2.0/text-to-video"
+  ) {
+    return 231.41
+  }
+  if (
+    turn.provider === "wavespeed" &&
     turn.model === "bytedance/seedance-2.0/image-to-video-turbo"
   ) {
     return 264.18
+  }
+  if (
+    turn.provider === "wavespeed" &&
+    turn.model === "kwaivgi/kling-video-o3-pro/image-to-video"
+  ) {
+    return 179.53
   }
   if (
     turn.provider === "replicate" &&
@@ -262,6 +279,16 @@ function generationEstimateSeconds(turn: Turn) {
 }
 
 const COMPLETION_SOUND = "/generation-complete.mp3"
+
+function nextVideoModel(model: ImageSettings["videoModel"]) {
+  if (model === "bytedance/seedance-2.0/text-to-video") {
+    return "kwaivgi/kling-video-o3-pro/image-to-video" as const
+  }
+  if (model === "kwaivgi/kling-video-o3-pro/image-to-video") {
+    return "xai/grok-imagine-video" as const
+  }
+  return "bytedance/seedance-2.0/text-to-video" as const
+}
 
 function prepareCompletionAlert() {
   if ("Notification" in window && Notification.permission === "default") {
@@ -944,13 +971,17 @@ function ConversationPage({
       if (event.key.toLowerCase() === "v" && sourceImage) {
         event.preventDefault()
         const videoModel =
-          settings.mode === "video" &&
-          settings.videoModel === "bytedance/seedance-2.0/image-to-video-turbo"
-            ? "xai/grok-imagine-video"
-            : "bytedance/seedance-2.0/image-to-video-turbo"
+          settings.mode === "video"
+            ? nextVideoModel(settings.videoModel)
+            : "bytedance/seedance-2.0/text-to-video"
         onSettingsChange({
           mode: "video",
           videoModel,
+          duration:
+            videoModel === "kwaivgi/kling-video-o3-pro/image-to-video" &&
+            settings.duration === 8
+              ? 5
+              : settings.duration,
           videoResolution:
             videoModel === "xai/grok-imagine-video"
               ? "720p"
@@ -964,6 +995,7 @@ function ConversationPage({
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [
     onSettingsChange,
+    settings.duration,
     settings.mode,
     settings.videoModel,
     settings.videoResolution,
@@ -1106,7 +1138,9 @@ function ConversationPage({
         videoModel:
           turn.model === "xai/grok-imagine-video"
             ? "xai/grok-imagine-video"
-            : "bytedance/seedance-2.0/image-to-video-turbo",
+            : turn.model === "kwaivgi/kling-video-o3-pro/image-to-video"
+              ? "kwaivgi/kling-video-o3-pro/image-to-video"
+              : "bytedance/seedance-2.0/text-to-video",
         videoAspectRatio: turn.aspectRatio,
         videoResolution: turn.videoResolution ?? "720p",
         duration: turn.duration ?? 5,
@@ -1830,7 +1864,10 @@ function PromptComposer({
   const [error, setError] = useState<string | null>(null)
   const isVideo = settings.mode === "video"
   const isSeedance =
-    settings.videoModel === "bytedance/seedance-2.0/image-to-video-turbo"
+    settings.videoModel === "bytedance/seedance-2.0/text-to-video"
+  const isKling =
+    settings.videoModel === "kwaivgi/kling-video-o3-pro/image-to-video"
+  const supportsAudioToggle = isSeedance || isKling
   const allowsAttachment = !isVideo
   const attachmentLimit = 2
   const resolvedPlaceholder = isVideo
@@ -1939,14 +1976,18 @@ function PromptComposer({
   }
   function selectVideoMode() {
     if (!allowVideo || busy || disabled || revisionMode) return
-    if (isVideo)
+    if (isVideo) {
+      const videoModel = nextVideoModel(settings.videoModel)
       onSettingsChange({
-        videoModel: isSeedance
-          ? "xai/grok-imagine-video"
-          : "bytedance/seedance-2.0/image-to-video-turbo",
+        videoModel,
+        duration:
+          videoModel === "kwaivgi/kling-video-o3-pro/image-to-video" &&
+          settings.duration === 8
+            ? 5
+            : settings.duration,
         videoResolution: "720p",
       })
-    else onSettingsChange({ mode: "video" })
+    } else onSettingsChange({ mode: "video" })
     clearAttachments()
     setActiveMention(null)
     setError(null)
@@ -2222,49 +2263,58 @@ function PromptComposer({
                   <span className="sr-only">Add reference image</span>
                 </Button>
               )}
-              <Select
-                value={
-                  isVideo ? settings.videoAspectRatio : settings.aspectRatio
-                }
-                disabled={busy || revisionMode}
-                onValueChange={(value) =>
-                  isVideo
-                    ? onSettingsChange({ videoAspectRatio: value })
-                    : onSettingsChange({
-                        aspectRatio: value as ImageSettings["aspectRatio"],
-                      })
-                }
-              >
-                <SelectTrigger
-                  size="sm"
-                  className="h-6 border-transparent bg-muted/45 px-2 text-[10px] text-muted-foreground hover:text-foreground"
+              {isVideo && isKling ? (
+                <Badge
+                  variant="ghost"
+                  className="h-6 text-[10px] text-muted-foreground"
                 >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent
-                  position="popper"
-                  align="start"
-                  className="min-w-24"
+                  Source ratio
+                </Badge>
+              ) : (
+                <Select
+                  value={
+                    isVideo ? settings.videoAspectRatio : settings.aspectRatio
+                  }
+                  disabled={busy || revisionMode}
+                  onValueChange={(value) =>
+                    isVideo
+                      ? onSettingsChange({ videoAspectRatio: value })
+                      : onSettingsChange({
+                          aspectRatio: value as ImageSettings["aspectRatio"],
+                        })
+                  }
                 >
-                  <SelectItem value="16:9" className="text-[11px]!">
-                    16:9
-                  </SelectItem>
-                  <SelectItem value="3:2" className="text-[11px]!">
-                    3:2
-                  </SelectItem>
-                  <SelectItem value="1:1" className="text-[11px]!">
-                    1:1
-                  </SelectItem>
-                  <SelectItem value="2:3" className="text-[11px]!">
-                    2:3
-                  </SelectItem>
-                  {isVideo && (
-                    <SelectItem value="9:16" className="text-[11px]!">
-                      9:16
+                  <SelectTrigger
+                    size="sm"
+                    className="h-6 border-transparent bg-muted/45 px-2 text-[10px] text-muted-foreground hover:text-foreground"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent
+                    position="popper"
+                    align="start"
+                    className="min-w-24"
+                  >
+                    <SelectItem value="16:9" className="text-[11px]!">
+                      16:9
                     </SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
+                    <SelectItem value="3:2" className="text-[11px]!">
+                      3:2
+                    </SelectItem>
+                    <SelectItem value="1:1" className="text-[11px]!">
+                      1:1
+                    </SelectItem>
+                    <SelectItem value="2:3" className="text-[11px]!">
+                      2:3
+                    </SelectItem>
+                    {isVideo && (
+                      <SelectItem value="9:16" className="text-[11px]!">
+                        9:16
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              )}
               {isVideo ? (
                 <>
                   <Select
@@ -2284,53 +2334,64 @@ function PromptComposer({
                       <SelectItem value="5" className="text-[11px]!">
                         5s
                       </SelectItem>
-                      <SelectItem value="8" className="text-[11px]!">
-                        8s
-                      </SelectItem>
+                      {!isKling && (
+                        <SelectItem value="8" className="text-[11px]!">
+                          8s
+                        </SelectItem>
+                      )}
                       <SelectItem value="10" className="text-[11px]!">
                         10s
                       </SelectItem>
                     </SelectContent>
                   </Select>
-                  <Select
-                    value={settings.videoResolution}
-                    disabled={busy || revisionMode}
-                    onValueChange={(value) =>
-                      onSettingsChange({
-                        videoResolution:
-                          value as ImageSettings["videoResolution"],
-                      })
-                    }
-                  >
-                    <SelectTrigger
-                      size="sm"
-                      className="h-6 border-transparent bg-muted/45 px-2 text-[10px] text-muted-foreground"
+                  {isKling ? (
+                    <Badge
+                      variant="ghost"
+                      className="h-6 text-[10px] text-muted-foreground"
                     >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent position="popper">
-                      {isSeedance ? (
-                        <>
-                          <SelectItem value="720p" className="text-[11px]!">
-                            720p
-                          </SelectItem>
-                          <SelectItem value="1080p" className="text-[11px]!">
-                            1080p
-                          </SelectItem>
-                        </>
-                      ) : (
-                        <>
-                          <SelectItem value="480p" className="text-[11px]!">
-                            480p
-                          </SelectItem>
-                          <SelectItem value="720p" className="text-[11px]!">
-                            720p
-                          </SelectItem>
-                        </>
-                      )}
-                    </SelectContent>
-                  </Select>
-                  {isSeedance ? (
+                      O3 Pro
+                    </Badge>
+                  ) : (
+                    <Select
+                      value={settings.videoResolution}
+                      disabled={busy || revisionMode}
+                      onValueChange={(value) =>
+                        onSettingsChange({
+                          videoResolution:
+                            value as ImageSettings["videoResolution"],
+                        })
+                      }
+                    >
+                      <SelectTrigger
+                        size="sm"
+                        className="h-6 border-transparent bg-muted/45 px-2 text-[10px] text-muted-foreground"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent position="popper">
+                        {isSeedance ? (
+                          <>
+                            <SelectItem value="720p" className="text-[11px]!">
+                              720p
+                            </SelectItem>
+                            <SelectItem value="1080p" className="text-[11px]!">
+                              1080p
+                            </SelectItem>
+                          </>
+                        ) : (
+                          <>
+                            <SelectItem value="480p" className="text-[11px]!">
+                              480p
+                            </SelectItem>
+                            <SelectItem value="720p" className="text-[11px]!">
+                              720p
+                            </SelectItem>
+                          </>
+                        )}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  {supportsAudioToggle ? (
                     <Button
                       type="button"
                       size="sm"

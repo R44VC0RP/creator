@@ -1,0 +1,56 @@
+{
+  "referenceFile": "../test-alpha/base.jpeg",
+  "referenceUrl": "https://d1q70p.cachecloud.net/media/004d56ae7e684a2e96014bbc907f71cb/images/1780074123098476340_LimRmPjJ.jpeg",
+  "referencePrompt": "The man in the reference image starts dancing around playfully in his room, doing upbeat side steps and arm movements while keeping his face, black OPENCODE graphic T-shirt, and room recognizable. Natural handheld camera feel, realistic motion, joyful energy.",
+  "textOnlyPrompt": "A realistic young man in a black OPENCODE graphic T-shirt dances around playfully in a creative bedroom studio, doing upbeat side steps and arm movements. Natural handheld camera feel, cinematic indoor lighting, realistic motion, joyful energy.",
+  "results": [
+    {
+      "label": "Kling Video O3 Pro Image-to-Video",
+      "model": "kwaivgi/kling-video-o3-pro/image-to-video",
+      "input": {
+        "prompt": "The man in the reference image starts dancing around playfully in his room, doing upbeat side steps and arm movements while keeping his face, black OPENCODE graphic T-shirt, and room recognizable. Natural handheld camera feel, realistic motion, joyful energy.",
+        "image": "https://d1q70p.cachecloud.net/media/004d56ae7e684a2e96014bbc907f71cb/images/1780074123098476340_LimRmPjJ.jpeg",
+        "duration": 10,
+        "sound": true
+      },
+      "status": "succeeded",
+      "predictionId": "72c9c2ff3d62427d8e3eaae0ee49d422",
+      "outputUrl": "https://d1q70p.cachecloud.net/predictions/72c9c2ff3d62427d8e3eaae0ee49d422/1.mp4",
+      "outputFile": "kling-video-o3-pro-image-to-video.mp4",
+      "elapsedMs": 149528
+    },
+    {
+      "label": "Kling Video O3 Pro Reference-to-Video",
+      "model": "kwaivgi/kling-video-o3-pro/reference-to-video",
+      "input": {
+        "prompt": "The man in the reference image starts dancing around playfully in his room, doing upbeat side steps and arm movements while keeping his face, black OPENCODE graphic T-shirt, and room recognizable. Natural handheld camera feel, realistic motion, joyful energy.",
+        "images": [
+          "https://d1q70p.cachecloud.net/media/004d56ae7e684a2e96014bbc907f71cb/images/1780074123098476340_LimRmPjJ.jpeg"
+        ],
+        "aspect_ratio": "16:9",
+        "duration": 10,
+        "sound": true
+      },
+      "status": "succeeded",
+      "predictionId": "ca76ae2dd4d94e10b1c2a614d3b49478",
+      "outputUrl": "https://d1q70p.cachecloud.net/predictions/ca76ae2dd4d94e10b1c2a614d3b49478/1.mp4",
+      "outputFile": "kling-video-o3-pro-reference-to-video.mp4",
+      "elapsedMs": 185482
+    },
+    {
+      "label": "Kling Video O3 4K Text-to-Video",
+      "model": "kwaivgi/kling-video-o3-4k/text-to-video",
+      "input": {
+        "prompt": "A realistic young man in a black OPENCODE graphic T-shirt dances around playfully in a creative bedroom studio, doing upbeat side steps and arm movements. Natural handheld camera feel, cinematic indoor lighting, realistic motion, joyful energy.",
+        "aspect_ratio": "16:9",
+        "duration": 10,
+        "sound": true
+      },
+      "status": "succeeded",
+      "predictionId": "b0c1596327514dc1ac2c9b62e7038844",
+      "outputUrl": "https://d1q70p.cachecloud.net/predictions/b0c1596327514dc1ac2c9b62e7038844/1.mp4",
+      "outputFile": "kling-video-o3-4k-text-to-video.mp4",
+      "elapsedMs": 149858
+    }
+  ]
+}

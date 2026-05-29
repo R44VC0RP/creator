@@ -7,7 +7,9 @@ export const GROK_IMAGE_MODEL: ImageModel = "xai/grok-imagine-image-quality"
 export const LEGACY_REPLICATE_SEEDANCE_MODEL: VideoModel =
   "bytedance/seedance-2.0"
 export const DEFAULT_VIDEO_MODEL: VideoModel =
-  "bytedance/seedance-2.0/image-to-video-turbo"
+  "bytedance/seedance-2.0/text-to-video"
+export const KLING_VIDEO_MODEL: VideoModel =
+  "kwaivgi/kling-video-o3-pro/image-to-video"
 export const GROK_VIDEO_MODEL: VideoModel = "xai/grok-imagine-video"
 export const MAX_PEOPLE_PER_TURN = 4
 export const MAX_ATTACHMENTS_PER_TURN = 2
@@ -98,7 +100,11 @@ export function parseGenerationMode(
 
 export function parseVideoModel(value: FormDataEntryValue | null): VideoModel {
   if (value === null || value === "") return DEFAULT_VIDEO_MODEL
-  if (value !== DEFAULT_VIDEO_MODEL && value !== GROK_VIDEO_MODEL) {
+  if (
+    value !== DEFAULT_VIDEO_MODEL &&
+    value !== KLING_VIDEO_MODEL &&
+    value !== GROK_VIDEO_MODEL
+  ) {
     throw new ApiError(400, "INVALID_MODEL", "Unsupported video model.")
   }
   return value

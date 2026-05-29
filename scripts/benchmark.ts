@@ -354,7 +354,7 @@ function markdownReport(
     "| Model | Average Successful Duration |",
     "| --- | ---: |",
     `| WaveSpeed GPT Image 2 | ${average(jobs, "openai/gpt-image-2/text-to-image")} |`,
-    `| WaveSpeed Seedance Turbo | ${average(jobs, "bytedance/seedance-2.0/image-to-video-turbo")} |`,
+    `| WaveSpeed Seedance Text-to-Video | ${average(jobs, "bytedance/seedance-2.0/text-to-video")} |`,
     `| Replicate Grok Video | ${average(jobs, "xai/grok-imagine-video")} |`,
     "",
     "## Jobs",
@@ -416,7 +416,7 @@ async function main() {
   }
 
   for (let index = 0; index < RUNS; index += 1) {
-    const name = `Seedance video ${index + 1}/${RUNS}`
+    const name = `Seedance text-to-video ${index + 1}/${RUNS}`
     const source = sources.find(
       (candidate) =>
         candidate.pipeline === "gpt-seedance" && candidate.index === index
@@ -433,7 +433,7 @@ async function main() {
           name,
           "gpt-seedance",
           "wavespeed",
-          "bytedance/seedance-2.0/image-to-video-turbo",
+          "bytedance/seedance-2.0/text-to-video",
           VIDEO_PROMPT,
           settings
         )
@@ -446,16 +446,16 @@ async function main() {
         pipeline: "gpt-seedance",
         stage: "video",
         provider: "wavespeed",
-        model: "bytedance/seedance-2.0/image-to-video-turbo",
+        model: "bytedance/seedance-2.0/text-to-video",
         prompt: VIDEO_PROMPT,
         settings,
       },
       () =>
         runWaveSpeed(
-          "/bytedance/seedance-2.0/image-to-video-turbo",
+          "/bytedance/seedance-2.0/text-to-video",
           {
             prompt: VIDEO_PROMPT,
-            image: source.image.url,
+            reference_images: [source.image.url],
             aspect_ratio: "16:9",
             resolution: "720p",
             duration: 5,
@@ -533,7 +533,7 @@ async function main() {
     `  GPT image average:       ${average(jobs, "openai/gpt-image-2/text-to-image")}`
   )
   console.log(
-    `  Seedance video average:  ${average(jobs, "bytedance/seedance-2.0/image-to-video-turbo")}`
+    `  Seedance video average:  ${average(jobs, "bytedance/seedance-2.0/text-to-video")}`
   )
   console.log(
     `  Grok video average:      ${average(jobs, "xai/grok-imagine-video")}`

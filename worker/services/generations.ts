@@ -12,6 +12,7 @@ import {
   DEFAULT_IMAGE_MODEL,
   GROK_IMAGE_MODEL,
   GROK_VIDEO_MODEL,
+  KLING_VIDEO_MODEL,
   LEGACY_REPLICATE_SEEDANCE_MODEL,
   now,
 } from "../lib/values"
@@ -198,17 +199,41 @@ async function createWaveSpeedSeedancePrediction(env: Env, turn: TurnRow) {
     env,
     await assetBlob(env, input.asset_id)
   )
-  return waveSpeedRequest(env, "/bytedance/seedance-2.0/image-to-video-turbo", {
+  return waveSpeedRequest(env, "/bytedance/seedance-2.0/text-to-video", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prompt: turn.authored_prompt,
+      reference_images: [sourceUrl],
+      duration: turn.video_duration ?? 5,
+      resolution: videoResolution(turn),
+      aspect_ratio: turn.aspect_ratio,
+      enable_web_search: false,
+      generate_audio: turn.generate_audio !== 0,
+    }),
+  })
+}
+
+async function createWaveSpeedKlingPrediction(env: Env, turn: TurnRow) {
+  const input = (await loadTurnInputs(env, turn.id))[0]
+  if (!input)
+    throw new ApiError(
+      409,
+      "REFERENCE_ASSET_MISSING",
+      "Kling requires a source image."
+    )
+  const sourceUrl = await uploadWaveSpeedSource(
+    env,
+    await assetBlob(env, input.asset_id)
+  )
+  return waveSpeedRequest(env, "/kwaivgi/kling-video-o3-pro/image-to-video", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       prompt: turn.authored_prompt,
       image: sourceUrl,
       duration: turn.video_duration ?? 5,
-      resolution: videoResolution(turn),
-      aspect_ratio: turn.aspect_ratio,
-      enable_web_search: false,
-      generate_audio: turn.generate_audio !== 0,
+      sound: turn.generate_audio !== 0,
     }),
   })
 }
@@ -324,7 +349,9 @@ export async function createPrediction(
     const prediction =
       turn.generation_mode === "image" && turn.model === DEFAULT_IMAGE_MODEL
         ? await createWaveSpeedGptPrediction(env, turn)
-        : await createWaveSpeedSeedancePrediction(env, turn)
+        : turn.model === KLING_VIDEO_MODEL
+          ? await createWaveSpeedKlingPrediction(env, turn)
+          : await createWaveSpeedSeedancePrediction(env, turn)
     const status =
       prediction.status === "completed"
         ? "processing"
@@ -630,7 +657,7 @@ export async function cancelTurn(env: Env, turnId: string) {
     throw new ApiError(
       409,
       "CANCEL_NOT_SUPPORTED",
-      "WaveSpeed Seedance tasks cannot be canceled through the documented API."
+      "WaveSpeed video tasks cannot be canceled through the documented API."
     )
   }
   if (turn.replicate_prediction_id) {
