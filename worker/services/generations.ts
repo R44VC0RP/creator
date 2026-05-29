@@ -157,12 +157,14 @@ async function uploadWaveSpeedSource(env: Env, blob: Blob) {
       body: form,
     }
   )
-  if (!response.ok)
+  if (!response.ok) {
+    const detail = await response.text()
     throw new ApiError(
       502,
       "WAVESPEED_UPLOAD_FAILED",
-      "WaveSpeed could not accept the source image."
+      `WaveSpeed source image upload failed (${response.status}): ${detail || "No provider detail returned."}`
     )
+  }
   const payload = (await response.json()) as {
     data?: { download_url?: string }
   }
@@ -173,6 +175,15 @@ async function uploadWaveSpeedSource(env: Env, blob: Blob) {
       "WaveSpeed did not return an image URL."
     )
   return payload.data.download_url
+}
+
+async function inlineImageSource(blob: Blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  const chunks: string[] = []
+  for (let index = 0; index < bytes.length; index += 32_768) {
+    chunks.push(String.fromCharCode(...bytes.subarray(index, index + 32_768)))
+  }
+  return `data:${blob.type};base64,${btoa(chunks.join(""))}`
 }
 
 async function createWaveSpeedSeedancePrediction(env: Env, turn: TurnRow) {
@@ -214,7 +225,7 @@ async function createWaveSpeedGptPrediction(env: Env, turn: TurnRow) {
       )
     }
     inputUrls.push(
-      await uploadWaveSpeedSource(env, await assetBlob(env, input.asset_id))
+      await inlineImageSource(await assetBlob(env, input.asset_id))
     )
   }
   const endpoint =

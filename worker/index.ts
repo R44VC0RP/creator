@@ -28,7 +28,6 @@ import {
   parseGenerationMode,
   parseImageModel,
   parseQuality,
-  parseResolution,
   parseVideoAspectRatio,
   parseVideoDuration,
   parseVideoModel,
@@ -113,15 +112,14 @@ async function sharedVideoResponse(c: Context<App>) {
       "The shared video asset does not exist."
     )
   }
-  const asset = await sharedVideoAsset(
-    c.env,
-    conversationId,
-    assetId
-  )
+  const asset = await sharedVideoAsset(c.env, conversationId, assetId)
   return serveSharedVideo(c.env, asset, c.req.raw)
 }
 
-share.get("/share/c/:conversationId/video/:assetId/video.mp4", sharedVideoResponse)
+share.get(
+  "/share/c/:conversationId/video/:assetId/video.mp4",
+  sharedVideoResponse
+)
 share.on(
   "HEAD",
   "/share/c/:conversationId/video/:assetId/video.mp4",
@@ -433,6 +431,10 @@ api.post("/generations/:id/regenerate", async (c) => {
   const turnId = id()
   const timestamp = now()
   const inputRows = await loadTurnInputs(c.env, source.id)
+  const model =
+    source.generation_mode === "image" ? DEFAULT_IMAGE_MODEL : source.model
+  const provider =
+    source.generation_mode === "image" ? "wavespeed" : source.provider
   await c.env.DB.batch([
     c.env.DB.prepare(
       "INSERT INTO turns (id, conversation_id, parent_turn_id, kind, authored_prompt, compiled_prompt, model, provider, generation_mode, aspect_ratio, quality, resolution, video_resolution, delivery_resolution, video_duration, generate_audio, output_format, status, created_at) VALUES (?, ?, ?, 'regeneration', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)"
@@ -442,12 +444,14 @@ api.post("/generations/:id/regenerate", async (c) => {
       source.parent_turn_id,
       source.authored_prompt,
       source.compiled_prompt,
-      source.model,
-      source.provider,
+      model,
+      provider,
       source.generation_mode,
       source.aspect_ratio,
-      source.quality,
-      source.resolution,
+      source.generation_mode === "image"
+        ? (source.quality ?? "medium")
+        : source.quality,
+      source.generation_mode === "image" ? null : source.resolution,
       source.video_resolution,
       source.delivery_resolution,
       source.video_duration,
@@ -534,6 +538,10 @@ api.post("/turns/:id/revise", async (c) => {
     source.generation_mode === "image"
       ? compilePrompt(prompt, compiledInputs)
       : prompt
+  const model =
+    source.generation_mode === "image" ? DEFAULT_IMAGE_MODEL : source.model
+  const provider =
+    source.generation_mode === "image" ? "wavespeed" : source.provider
   await c.env.DB.batch([
     c.env.DB.prepare(
       "INSERT INTO conversations (id, title, title_status, forked_from_conversation_id, forked_from_turn_id, created_at, updated_at) VALUES (?, ?, 'generating', ?, ?, ?, ?)"
@@ -564,12 +572,14 @@ api.post("/turns/:id/revise", async (c) => {
       source.kind,
       prompt,
       compiledPrompt,
-      source.model,
-      source.provider,
+      model,
+      provider,
       source.generation_mode,
       source.aspect_ratio,
-      source.quality,
-      source.resolution,
+      source.generation_mode === "image"
+        ? (source.quality ?? "medium")
+        : source.quality,
+      source.generation_mode === "image" ? null : source.resolution,
       source.video_resolution,
       source.delivery_resolution,
       source.video_duration,
@@ -781,21 +791,11 @@ async function createGenerationFromRequest(c: Context<App>) {
     mode === "video"
       ? parseVideoAspectRatio(data.get("aspectRatio"))
       : parseAspectRatio(data.get("aspectRatio"))
-  if (mode === "image" && model === GROK_IMAGE_MODEL && data.has("quality")) {
-    throw new ApiError(
-      400,
-      "MODEL_SETTING_UNSUPPORTED",
-      "Quality is only supported for GPT Image 2 generations."
-    )
-  }
   const quality =
     mode === "image" && model === DEFAULT_IMAGE_MODEL
       ? parseQuality(data.get("quality"))
       : "medium"
-  const resolution =
-    mode === "image" && model === GROK_IMAGE_MODEL
-      ? parseResolution(data.get("resolution"))
-      : null
+  const resolution = null
   const videoResolution =
     mode === "video" ? parseVideoResolution(data.get("videoResolution")) : null
   const videoDuration =
@@ -878,41 +878,6 @@ async function createGenerationFromRequest(c: Context<App>) {
       "Video generations use only the focused image and a text prompt."
     )
   }
-  if (
-    mode === "image" &&
-    model === GROK_IMAGE_MODEL &&
-    requestedPersonIds.length > 0
-  ) {
-    throw new ApiError(
-      400,
-      "MODEL_INPUTS_UNSUPPORTED",
-      "Grok Imagine Quality does not support People references in this workflow."
-    )
-  }
-  if (
-    mode === "image" &&
-    model === GROK_IMAGE_MODEL &&
-    !suppliedConversationId &&
-    attachments.length > 1
-  ) {
-    throw new ApiError(
-      400,
-      "MODEL_INPUTS_UNSUPPORTED",
-      "A new Grok generation may include one reference image."
-    )
-  }
-  if (
-    mode === "image" &&
-    model === GROK_IMAGE_MODEL &&
-    suppliedConversationId &&
-    attachments.length > 0
-  ) {
-    throw new ApiError(
-      400,
-      "MODEL_INPUTS_UNSUPPORTED",
-      "Grok follow-up prompts edit the previous output and cannot include another reference image."
-    )
-  }
   const conversationId = suppliedConversationId ?? id()
   const turnId = id()
   const timestamp = now()
@@ -978,7 +943,10 @@ async function createGenerationFromRequest(c: Context<App>) {
         "The selected previous image is not available for editing."
       )
     }
-    if (parent.model !== model) {
+    if (
+      parent.model !== model &&
+      !(model === DEFAULT_IMAGE_MODEL && parent.model === GROK_IMAGE_MODEL)
+    ) {
       throw new ApiError(
         400,
         "MODEL_CHANGE_UNSUPPORTED",
@@ -1365,7 +1333,9 @@ async function sharedConversation(
           id: output.id,
           mimeType: output.mime_type,
           posterAssetId:
-            output.mime_type === "video/mp4" ? output.source_asset_id : output.id,
+            output.mime_type === "video/mp4"
+              ? output.source_asset_id
+              : output.id,
         }
       : null,
   }

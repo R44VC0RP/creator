@@ -9,7 +9,7 @@ Image-generation workspace built with React, Vite, shadcn/ui, and a Cloudflare W
 - Metadata: Cloudflare D1, with local SQLite-compatible state through Wrangler.
 - Media: private Cloudflare R2 bucket.
 - Image normalization and preview variants: Cloudflare Images binding.
-- Generation: WaveSpeed `openai/gpt-image-2` and `bytedance/seedance-2.0/image-to-video-turbo`; Replicate `xai/grok-imagine-image-quality` and `xai/grok-imagine-video`.
+- Generation: WaveSpeed `openai/gpt-image-2` and `bytedance/seedance-2.0/image-to-video-turbo`; Replicate `xai/grok-imagine-video`.
 - Conversation titles: OpenCode Zen `claude-haiku-4-5` through the Anthropic AI SDK provider.
 
 ## Local Setup
@@ -123,10 +123,9 @@ Generation multipart fields:
 ```text
 prompt          required string
 mode            image | video; defaults to image
-model           openai/gpt-image-2 | xai/grok-imagine-image-quality; defaults to GPT Image 2
+model           openai/gpt-image-2 for images; video models are described below
 aspectRatio     1:1 | 3:2 | 2:3 | 16:9
-quality         low | medium | high; GPT Image 2 only, mapped to 1k | 2k | 4k respectively
-resolution      1k | 2k; Grok Imagine Quality only, defaults to 2k
+quality         low | medium | high; mapped to 1k | 2k | 4k respectively
 personIds       repeatable; maximum four
 attachments     repeatable image file; maximum two
 conversationId  include for modifications
@@ -135,7 +134,7 @@ parentTurnId    include for modifications
 
 Initial generations accept at most six image references: four People and two prompt attachments. Modifications also include the immediately previous generated image as the edit base, for at most seven reference images. Only People tagged in the current modification are submitted again.
 
-New `openai/gpt-image-2` turns run through WaveSpeed: prompts with no input images use `openai/gpt-image-2/text-to-image`, while turns with People, uploaded references, or a prior output use `openai/gpt-image-2/edit`. Its single visible quality tier also fixes WaveSpeed output resolution: `low` uses `1k`, `medium` uses `2k`, and `high` uses `4k`. Existing Replicate-backed GPT turns preserve their original provider for reruns and prompt revisions. `xai/grok-imagine-image-quality` supports a text-only new generation or one uploaded reference image on the initial generation. After a Grok output exists, follow-up prompts use that previous output as Grok's single edit image and cannot add more reference images or People.
+Image turns use WaveSpeed `openai/gpt-image-2`: prompts with no input images use `openai/gpt-image-2/text-to-image`, while turns with People, uploaded references, or a prior output use `openai/gpt-image-2/edit`. Private GPT reference assets are supplied as inline data URLs rather than uploaded to WaveSpeed media storage. Its single visible quality tier also fixes WaveSpeed output resolution: `low` uses `1k`, `medium` uses `2k`, and `high` uses `4k`. Historical Grok image outputs remain visible, but reruns, revisions, and follow-up edits from them submit as GPT image turns.
 
 Video mode is available from a completed focused still image and creates a derivative video output without replacing the still-image edit branch. Seedance uses WaveSpeed model `bytedance/seedance-2.0/image-to-video-turbo` with `videoResolution: 720p | 1080p`; Grok video stays on Replicate as `xai/grok-imagine-video` with `videoResolution: 480p | 720p`. Both accept a duration and video-compatible aspect ratio. Seedance accepts `generateAudio`; Grok video includes native synchronized audio without an exposed off switch. Video outputs are persisted as private MP4 assets in R2 and served directly rather than through image transformations.
 
@@ -149,9 +148,9 @@ Run a paid, sequential generation baseline using local `WAVESPEED_API_KEY` and `
 bun run benchmark
 ```
 
-The benchmark runs three text-only WaveSpeed GPT Image 2 generations and three text-only Replicate Grok Image Quality generations using matched prompts. It then creates one WaveSpeed Seedance Turbo video from each GPT output and one Replicate Grok video from each Grok output. Jobs run one at a time so recorded durations are straightforward to compare.
+The benchmark runs three text-only WaveSpeed GPT Image 2 generations. It then creates one WaveSpeed Seedance Turbo video and one Replicate Grok video from each GPT output. Jobs run one at a time so recorded durations are straightforward to compare.
 
-Benchmark settings are intentionally fixed in `scripts/benchmark.ts`: GPT uses the app's `Medium` tier (`2k`) at `16:9`, Grok images use `2k` at `16:9`, and generated videos use `720p`, `16:9`, and a 5-second duration. Results and provider output URLs are written to ignored timestamped JSON and Markdown files under `benchmark-results/`.
+Benchmark settings are intentionally fixed in `scripts/benchmark.ts`: GPT uses the app's `Medium` tier (`2k`) at `16:9`, and generated videos use `720p`, `16:9`, and a 5-second duration. Results and provider output URLs are written to ignored timestamped JSON and Markdown files under `benchmark-results/`.
 
 The active generation UI uses the initial benchmark averages plus a 30-second completion buffer as an explicitly labeled estimated progress percentage for these model/provider paths. Estimated progress advances by elapsed time, caps at `99%` until a provider reports completion, and changes to `100%` while the output is being persisted. It is not provider-reported generation progress.
 

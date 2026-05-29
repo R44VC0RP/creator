@@ -12,7 +12,7 @@ type CompletedMedia = {
 
 type BenchmarkJob = {
   name: string
-  pipeline: "gpt-seedance" | "grok-grok-video"
+  pipeline: "gpt-seedance" | "gpt-grok-video"
   stage: MediaKind
   provider: Provider
   model: string
@@ -354,7 +354,6 @@ function markdownReport(
     "| Model | Average Successful Duration |",
     "| --- | ---: |",
     `| WaveSpeed GPT Image 2 | ${average(jobs, "openai/gpt-image-2/text-to-image")} |`,
-    `| Replicate Grok Image Quality | ${average(jobs, "xai/grok-imagine-image-quality")} |`,
     `| WaveSpeed Seedance Turbo | ${average(jobs, "bytedance/seedance-2.0/image-to-video-turbo")} |`,
     `| Replicate Grok Video | ${average(jobs, "xai/grok-imagine-video")} |`,
     "",
@@ -375,12 +374,8 @@ async function main() {
   const sources: PipelineSource[] = []
 
   console.log("Sequential media benchmark")
-  console.log(
-    "Runs: 3 GPT images -> Seedance videos, then 3 Grok images -> Grok videos"
-  )
-  console.log(
-    "GPT: Medium tier (2k), 16:9 | Grok image: 2k, 16:9 | Videos: 720p, 5s"
-  )
+  console.log("Runs: 3 GPT images -> Seedance videos and Grok videos")
+  console.log("GPT: Medium tier (2k), 16:9 | Videos: 720p, 5s")
 
   for (let index = 0; index < RUNS; index += 1) {
     const prompt = IMAGE_PROMPTS[index]
@@ -418,35 +413,6 @@ async function main() {
     jobs.push(result.job)
     if (result.result)
       sources.push({ pipeline: "gpt-seedance", index, image: result.result })
-  }
-
-  for (let index = 0; index < RUNS; index += 1) {
-    const prompt = IMAGE_PROMPTS[index]
-    const name = `Grok image ${index + 1}/${RUNS}`
-    const result = await timedJob(
-      {
-        name,
-        pipeline: "grok-grok-video",
-        stage: "image",
-        provider: "replicate",
-        model: "xai/grok-imagine-image-quality",
-        prompt,
-        settings: { aspect_ratio: "16:9", resolution: "2k" },
-      },
-      () =>
-        runReplicate(
-          "xai/grok-imagine-image-quality",
-          {
-            prompt,
-            aspect_ratio: "16:9",
-            resolution: "2k",
-          },
-          name
-        )
-    )
-    jobs.push(result.job)
-    if (result.result)
-      sources.push({ pipeline: "grok-grok-video", index, image: result.result })
   }
 
   for (let index = 0; index < RUNS; index += 1) {
@@ -506,14 +472,14 @@ async function main() {
     const name = `Grok video ${index + 1}/${RUNS}`
     const source = sources.find(
       (candidate) =>
-        candidate.pipeline === "grok-grok-video" && candidate.index === index
+        candidate.pipeline === "gpt-seedance" && candidate.index === index
     )
     const settings = { aspect_ratio: "16:9", resolution: "720p", duration: 5 }
     if (!source) {
       jobs.push(
         skippedVideo(
           name,
-          "grok-grok-video",
+          "gpt-grok-video",
           "replicate",
           "xai/grok-imagine-video",
           VIDEO_PROMPT,
@@ -525,7 +491,7 @@ async function main() {
     const result = await timedJob(
       {
         name,
-        pipeline: "grok-grok-video",
+        pipeline: "gpt-grok-video",
         stage: "video",
         provider: "replicate",
         model: "xai/grok-imagine-video",
@@ -565,9 +531,6 @@ async function main() {
   console.log("\nBenchmark complete")
   console.log(
     `  GPT image average:       ${average(jobs, "openai/gpt-image-2/text-to-image")}`
-  )
-  console.log(
-    `  Grok image average:      ${average(jobs, "xai/grok-imagine-image-quality")}`
   )
   console.log(
     `  Seedance video average:  ${average(jobs, "bytedance/seedance-2.0/image-to-video-turbo")}`

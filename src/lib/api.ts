@@ -294,8 +294,6 @@ export async function createGeneration(draft: GenerationDraft) {
       body.set("generateAudio", String(draft.generateAudio !== false))
   } else if (draft.model === "openai/gpt-image-2") {
     body.set("quality", draft.quality ?? "medium")
-  } else {
-    body.set("resolution", draft.resolution ?? "2k")
   }
   draft.people.forEach((item) => body.append("personIds", item.id))
   draft.attachments.forEach((file) => body.append("attachments", file))

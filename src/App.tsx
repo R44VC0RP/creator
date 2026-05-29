@@ -117,7 +117,6 @@ import {
   type GalleryItem,
   type GenerationDraft,
   type GenerationModel,
-  type ImageModel,
   type Person,
   type Turn,
 } from "@/lib/api"
@@ -125,13 +124,12 @@ import { cn } from "@/lib/utils"
 
 type ImageSettings = {
   mode: "image" | "video"
-  model: ImageModel
+  model: "openai/gpt-image-2"
   videoModel:
     | "bytedance/seedance-2.0/image-to-video-turbo"
     | "xai/grok-imagine-video"
   aspectRatio: "1:1" | "3:2" | "2:3" | "16:9"
   quality: "low" | "medium" | "high"
-  resolution: "1k" | "2k"
   videoAspectRatio: string
   videoResolution: "480p" | "720p" | "1080p"
   duration: number
@@ -169,7 +167,6 @@ function loadSettings(): ImageSettings {
     videoModel: "bytedance/seedance-2.0/image-to-video-turbo",
     aspectRatio: "3:2",
     quality: "medium",
-    resolution: "2k",
     videoAspectRatio: "16:9",
     videoResolution: "720p",
     duration: 5,
@@ -193,6 +190,7 @@ function loadSettings(): ImageSettings {
     return {
       ...fallback,
       ...savedValue,
+      model: fallback.model,
       videoModel: videoModel ?? fallback.videoModel,
     }
   } catch {
@@ -813,22 +811,6 @@ function LandingPage({
       ?.skipComposerMotion
   )
 
-  useEffect(() => {
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (!canUseShortcut(event) || event.key.toLowerCase() !== "i") return
-      event.preventDefault()
-      onSettingsChange({
-        mode: "image",
-        model:
-          settings.model === "openai/gpt-image-2"
-            ? "xai/grok-imagine-image-quality"
-            : "openai/gpt-image-2",
-      })
-    }
-    window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [onSettingsChange, settings.model])
-
   async function submit(value: ComposerSubmission) {
     prepareCompletionAlert()
     const result = await mutation.mutateAsync({
@@ -868,7 +850,6 @@ function LandingPage({
           onSettingsChange={onSettingsChange}
           onSubmit={submit}
           busy={mutation.isPending}
-          canToggleImageModel
         />
       </motion.div>
     </div>
@@ -948,8 +929,6 @@ function ConversationPage({
       item.status === "failed" ||
       item.status === "canceled"
   )
-  const conversationModel =
-    latestSuccessful?.model ?? activeTurn?.model ?? "openai/gpt-image-2"
   const sourceImage =
     focusedTurn?.mode === "image" && focusedTurn.status === "succeeded"
       ? focusedTurn
@@ -1065,7 +1044,7 @@ function ConversationPage({
             ...value,
             ...settings,
             mode: "image",
-            model: conversationModel as ImageModel,
+            model: "openai/gpt-image-2",
             conversationId,
             parentTurnId: sourceImage.id,
           })
@@ -1137,15 +1116,9 @@ function ConversationPage({
     }
     onSettingsChange({
       mode: "image",
-      model: turn.model as ImageModel,
+      model: "openai/gpt-image-2",
       aspectRatio: turn.aspectRatio as ImageSettings["aspectRatio"],
       quality: turn.quality ?? "medium",
-      ...(turn.model === "xai/grok-imagine-image-quality"
-        ? {
-            resolution: (turn.resolution ??
-              "2k") as ImageSettings["resolution"],
-          }
-        : {}),
     })
   }
 
@@ -1241,7 +1214,7 @@ function ConversationPage({
           settings={
             revisionTurn
               ? settings
-              : { ...settings, model: conversationModel as ImageModel }
+              : { ...settings, model: "openai/gpt-image-2" }
           }
           onSettingsChange={onSettingsChange}
           onSubmit={submit}
@@ -1827,7 +1800,6 @@ function PromptComposer({
   onSubmit,
   busy,
   disabled = false,
-  canToggleImageModel = false,
   allowVideo = false,
   initialPrompt = "",
   revisionMode = false,
@@ -1841,7 +1813,6 @@ function PromptComposer({
   onSubmit: (draft: ComposerSubmission) => Promise<void>
   busy: boolean
   disabled?: boolean
-  canToggleImageModel?: boolean
   allowVideo?: boolean
   initialPrompt?: string
   revisionMode?: boolean
@@ -1858,21 +1829,16 @@ function PromptComposer({
   const [dragging, setDragging] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const isVideo = settings.mode === "video"
-  const isGrok = settings.model === "xai/grok-imagine-image-quality"
   const isSeedance =
     settings.videoModel === "bytedance/seedance-2.0/image-to-video-turbo"
-  const allowsAttachment = !isVideo && (!isGrok || canToggleImageModel)
-  const attachmentLimit = isGrok ? 1 : 2
+  const allowsAttachment = !isVideo
+  const attachmentLimit = 2
   const resolvedPlaceholder = isVideo
     ? "Describe motion, camera movement, and sound..."
-    : isGrok
-      ? canToggleImageModel
-        ? "Type a text prompt or add one reference image..."
-        : "Describe a change..."
-      : placeholder
+    : placeholder
   const deferredQuery = useDeferredValue(activeMention?.query ?? "")
   const suggestions =
-    !revisionMode && !isVideo && !isGrok && activeMention
+    !revisionMode && !isVideo && activeMention
       ? people
           .filter((person) =>
             `${person.name} ${person.handle}`
@@ -1967,22 +1933,9 @@ function PromptComposer({
     setActiveMention(null)
     setError(null)
   }
-  function toggleImageModel() {
-    if (!canToggleImageModel || busy || disabled || revisionMode) return
-    if (!isGrok && (mentionedPeople().length > 0 || attachments.length > 1)) {
-      setError("Grok supports one reference image and no tagged People.")
-      return
-    }
-    onSettingsChange({
-      model: isGrok ? "openai/gpt-image-2" : "xai/grok-imagine-image-quality",
-    })
-    setActiveMention(null)
-    setError(null)
-  }
   function selectImageMode() {
     if (busy || disabled || revisionMode) return
-    if (!isVideo) toggleImageModel()
-    else onSettingsChange({ mode: "image" })
+    onSettingsChange({ mode: "image", model: "openai/gpt-image-2" })
   }
   function selectVideoMode() {
     if (!allowVideo || busy || disabled || revisionMode) return
@@ -2004,20 +1957,14 @@ function PromptComposer({
       return
     }
     if (!allowsAttachment) {
-      setError(
-        "Grok follow-up prompts edit the previous output and cannot include another reference image."
-      )
+      setError("Video generations cannot include additional reference images.")
       return
     }
     const images = files.filter((file) => file.type.startsWith("image/"))
     setAttachments((current) => {
       const remaining = attachmentLimit - current.length
       if (images.length > remaining)
-        setError(
-          isGrok
-            ? "Grok supports one reference image."
-            : "A prompt can include up to two reference images."
-        )
+        setError("A prompt can include up to two reference images.")
       const added = images
         .slice(0, remaining)
         .map((file) => ({ file, previewUrl: URL.createObjectURL(file) }))
@@ -2135,30 +2082,19 @@ function PromptComposer({
             animate={{ opacity: 1, y: 0 }}
             disabled={busy || disabled || revisionMode}
             aria-label={`Image mode. ${modelName(settings.model)}`}
-            title={
-              canToggleImageModel
-                ? "Select image or switch model"
-                : "Select image mode"
-            }
+            title="Select image mode"
             onMouseDown={(event) => event.preventDefault()}
             onClick={selectImageMode}
             className={cn(
               "absolute top-0 left-3 flex -translate-y-full items-center gap-1.5 rounded-t-md border border-b-0 px-2.5 py-1 text-[10px] font-medium tracking-wide transition-colors",
               isVideo
                 ? "border-border bg-card text-muted-foreground"
-                : isGrok
-                  ? "border-[#2B2B2B] bg-[#2B2B2B] text-foreground"
-                  : "border-[#435064]/70 bg-[#252a33] text-[#aebbcf]",
-              canToggleImageModel || isVideo
-                ? "hover:brightness-110"
-                : "cursor-default"
+                : "border-[#435064]/70 bg-[#252a33] text-[#aebbcf]",
+              isVideo ? "hover:brightness-110" : "cursor-default"
             )}
           >
             <ImageIcon className="size-3" />
             {modelName(settings.model)}
-            {canToggleImageModel && (
-              <ArrowLeftRight className="size-3 text-muted-foreground" />
-            )}
           </motion.button>
           {allowVideo && (
             <motion.button
@@ -2279,13 +2215,6 @@ function PromptComposer({
                     busy ||
                     !allowsAttachment ||
                     attachments.length >= attachmentLimit
-                  }
-                  title={
-                    isGrok
-                      ? canToggleImageModel
-                        ? "Add one Grok reference image"
-                        : "Grok edits the previous output"
-                      : undefined
                   }
                   onClick={() => fileRef.current?.click()}
                 >
@@ -2427,35 +2356,6 @@ function PromptComposer({
                     </Badge>
                   )}
                 </>
-              ) : isGrok ? (
-                <Select
-                  value={settings.resolution}
-                  disabled={busy || revisionMode}
-                  onValueChange={(value) =>
-                    onSettingsChange({
-                      resolution: value as ImageSettings["resolution"],
-                    })
-                  }
-                >
-                  <SelectTrigger
-                    size="sm"
-                    className="h-6 border-transparent bg-muted/45 px-2 text-[10px] text-muted-foreground hover:text-foreground"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent
-                    position="popper"
-                    align="start"
-                    className="min-w-24"
-                  >
-                    <SelectItem value="1k" className="text-[11px]!">
-                      1K
-                    </SelectItem>
-                    <SelectItem value="2k" className="text-[11px]!">
-                      2K
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
               ) : (
                 <Select
                   value={settings.quality}

@@ -1,0 +1,47 @@
+{
+  "prompt": "The man in the reference image starts dancing around playfully in his room, doing upbeat side steps and arm movements while keeping his face, clothing, and room recognizable. Natural handheld camera feel, realistic motion, joyful energy.",
+  "referenceFile": "base.jpeg",
+  "referenceUrl": "https://d1q70p.cachecloud.net/media/004d56ae7e684a2e96014bbc907f71cb/images/1780072773816290879_tG4MU3dm.jpeg",
+  "results": [
+    {
+      "label": "Seedance 2.0 Image-to-Video Turbo",
+      "model": "bytedance/seedance-2.0/image-to-video-turbo",
+      "endpoint": "/bytedance/seedance-2.0/image-to-video-turbo",
+      "input": {
+        "prompt": "The man in the reference image starts dancing around playfully in his room, doing upbeat side steps and arm movements while keeping his face, clothing, and room recognizable. Natural handheld camera feel, realistic motion, joyful energy.",
+        "aspect_ratio": "16:9",
+        "resolution": "720p",
+        "duration": 10,
+        "enable_web_search": false,
+        "generate_audio": true,
+        "image": "Original WaveSpeed upload of base.jpeg"
+      },
+      "status": "succeeded",
+      "predictionId": "bf1c7f5ebdf6463f9c38ff3e714613ae",
+      "outputUrl": "https://d2p7pg.cachecloud.net/output/7a47021e-284f-45d5-943e-9e8c63aa6e1a-u1_4ea3693d-debc-41ab-827d-dda6a5b4ed7a.mp4",
+      "outputFile": "image-to-video-turbo.mp4",
+      "elapsedMs": 13101
+    },
+    {
+      "label": "Seedance 2.0 Fast Text-to-Video Turbo with reference image",
+      "model": "bytedance/seedance-2.0-fast/text-to-video-turbo",
+      "endpoint": "/bytedance/seedance-2.0-fast/text-to-video-turbo",
+      "input": {
+        "prompt": "The man in the reference image starts dancing around playfully in his room, doing upbeat side steps and arm movements while keeping his face, clothing, and room recognizable. Natural handheld camera feel, realistic motion, joyful energy.",
+        "aspect_ratio": "16:9",
+        "resolution": "720p",
+        "duration": 10,
+        "enable_web_search": false,
+        "generate_audio": true,
+        "reference_images": [
+          "https://d1q70p.cachecloud.net/media/004d56ae7e684a2e96014bbc907f71cb/images/1780072773816290879_tG4MU3dm.jpeg"
+        ]
+      },
+      "status": "succeeded",
+      "predictionId": "a1017ecfc3484ac6a595cc0aa51badb1",
+      "outputUrl": "https://d2p7pg.cachecloud.net/output/ed4de195-ba15-444b-a546-f23f20811936-u2_9fda30fb-5e1e-4c81-ab46-aba8a17a393d.mp4",
+      "outputFile": "text-to-video-turbo.mp4",
+      "elapsedMs": 257580
+    }
+  ]
+}

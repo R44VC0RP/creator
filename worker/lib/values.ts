@@ -76,21 +76,11 @@ export function parseImageModel(value: FormDataEntryValue | null): ImageModel {
   if (value === null || value === "") {
     return DEFAULT_IMAGE_MODEL
   }
-  if (value !== DEFAULT_IMAGE_MODEL && value !== GROK_IMAGE_MODEL) {
-    throw new ApiError(400, "INVALID_MODEL", "Unsupported image model.")
-  }
-  return value
-}
-
-export function parseResolution(value: FormDataEntryValue | null): "1k" | "2k" {
-  if (value === null || value === "") {
-    return "2k"
-  }
-  if (value !== "1k" && value !== "2k") {
+  if (value !== DEFAULT_IMAGE_MODEL) {
     throw new ApiError(
       400,
-      "INVALID_RESOLUTION",
-      "Unsupported Grok resolution."
+      "INVALID_MODEL",
+      "GPT is the only available image model."
     )
   }
   return value
