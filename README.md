@@ -11,6 +11,7 @@ Image-generation workspace built with React, Vite, shadcn/ui, and a Cloudflare W
 - Image normalization and preview variants: Cloudflare Images binding.
 - Generation: WaveSpeed `openai/gpt-image-2`, `bytedance/seedance-2.0/text-to-video`, and `kwaivgi/kling-video-o3-pro/image-to-video`; Replicate `xai/grok-imagine-video`.
 - Conversation titles: OpenCode Zen `claude-haiku-4-5` through the Anthropic AI SDK provider.
+- Video prompt enhancement: OpenCode Zen `gpt-5.5` through the OpenAI AI SDK Responses provider.
 
 ## Local Setup
 
@@ -116,6 +117,7 @@ GET    /api/generations/:id/events        SSE live lifecycle updates
 POST   /api/generations/:id/cancel
 POST   /api/generations/:id/regenerate    Rerun succeeded, failed or canceled turn; JSON: conversationId? for fork context
 POST   /api/turns/:id/revise              Create a new branch with edited prompt text and original inputs/settings
+POST   /api/prompts/video/enhance          JSON: prompt, model, duration, generateAudio; returns an enhanced prompt
 ```
 
 Generation multipart fields:

@@ -24,6 +24,7 @@ import {
   LoaderCircle,
   Plus,
   RefreshCw,
+  Sparkles,
   Trash2,
   Video,
   Volume2,
@@ -105,6 +106,7 @@ import {
   deleteConversation,
   deleteGalleryItem,
   deletePerson,
+  enhanceVideoPrompt,
   forkTurn,
   getConversation,
   getGalleryItem,
@@ -1862,6 +1864,7 @@ function PromptComposer({
   const attachmentsRef = useRef<DraftAttachment[]>([])
   const [dragging, setDragging] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [enhancing, setEnhancing] = useState(false)
   const isVideo = settings.mode === "video"
   const isSeedance =
     settings.videoModel === "bytedance/seedance-2.0/text-to-video"
@@ -1869,6 +1872,7 @@ function PromptComposer({
     settings.videoModel === "kwaivgi/kling-video-o3-pro/image-to-video"
   const supportsAudioToggle = isSeedance || isKling
   const allowsAttachment = !isVideo
+  const unavailable = busy || enhancing
   const attachmentLimit = 2
   const resolvedPlaceholder = isVideo
     ? "Describe motion, camera movement, and sound..."
@@ -1971,11 +1975,11 @@ function PromptComposer({
     setError(null)
   }
   function selectImageMode() {
-    if (busy || disabled || revisionMode) return
+    if (unavailable || disabled || revisionMode) return
     onSettingsChange({ mode: "image", model: "openai/gpt-image-2" })
   }
   function selectVideoMode() {
-    if (!allowVideo || busy || disabled || revisionMode) return
+    if (!allowVideo || unavailable || disabled || revisionMode) return
     if (isVideo) {
       const videoModel = nextVideoModel(settings.videoModel)
       onSettingsChange({
@@ -2027,7 +2031,7 @@ function PromptComposer({
   }
   async function submit() {
     const prompt = promptValue()
-    if (!prompt || !editorRef.current || busy || disabled) return
+    if (!prompt || !editorRef.current || unavailable || disabled) return
     setError(null)
     try {
       await onSubmit({
@@ -2043,6 +2047,29 @@ function PromptComposer({
       setActiveMention(null)
     } catch (cause) {
       setError(message(cause))
+    }
+  }
+  async function enhancePrompt() {
+    const prompt = promptValue()
+    if (!prompt || !editorRef.current || unavailable || disabled || !isVideo)
+      return
+    setError(null)
+    setEnhancing(true)
+    try {
+      const enhanced = await enhanceVideoPrompt(
+        prompt,
+        settings.videoModel,
+        settings.duration,
+        settings.generateAudio
+      )
+      editorRef.current.textContent = enhanced
+      setHasPrompt(true)
+      setActiveMention(null)
+      editorRef.current.focus()
+    } catch (cause) {
+      setError(message(cause))
+    } finally {
+      setEnhancing(false)
     }
   }
   function keyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -2121,7 +2148,7 @@ function PromptComposer({
             type="button"
             initial={{ opacity: 0, y: 5 }}
             animate={{ opacity: 1, y: 0 }}
-            disabled={busy || disabled || revisionMode}
+            disabled={unavailable || disabled || revisionMode}
             aria-label={`Image mode. ${modelName(settings.model)}`}
             title="Select image mode"
             onMouseDown={(event) => event.preventDefault()}
@@ -2142,7 +2169,7 @@ function PromptComposer({
               type="button"
               initial={{ opacity: 0, y: 5 }}
               animate={{ opacity: 1, y: 0 }}
-              disabled={busy || disabled || revisionMode}
+              disabled={unavailable || disabled || revisionMode}
               aria-label={`Video mode. ${modelName(settings.videoModel)}`}
               title="Select video or switch model"
               onMouseDown={(event) => event.preventDefault()}
@@ -2175,10 +2202,10 @@ function PromptComposer({
           <div
             ref={editorRef}
             role="textbox"
-            aria-label="Image prompt"
+            aria-label={isVideo ? "Video prompt" : "Image prompt"}
             aria-multiline="true"
             data-placeholder={resolvedPlaceholder}
-            contentEditable={!disabled && !busy}
+            contentEditable={!disabled && !unavailable}
             suppressContentEditableWarning
             className="prompt-editor min-h-0 flex-1 overflow-y-auto px-0.5 pt-0.5 text-base leading-6 text-foreground outline-none md:text-[13px]"
             onInput={handleInput}
@@ -2234,7 +2261,7 @@ function PromptComposer({
           {error && (
             <p className="mt-1 text-[11px] text-destructive">{error}</p>
           )}
-          <div className="mt-2 flex items-end justify-between gap-1.5">
+          <div className="mt-2 flex flex-wrap items-end justify-between gap-1.5">
             <div className="flex items-center gap-1">
               <input
                 ref={fileRef}
@@ -2253,7 +2280,7 @@ function PromptComposer({
                   variant="ghost"
                   disabled={
                     disabled ||
-                    busy ||
+                    unavailable ||
                     !allowsAttachment ||
                     attachments.length >= attachmentLimit
                   }
@@ -2275,7 +2302,7 @@ function PromptComposer({
                   value={
                     isVideo ? settings.videoAspectRatio : settings.aspectRatio
                   }
-                  disabled={busy || revisionMode}
+                  disabled={unavailable || revisionMode}
                   onValueChange={(value) =>
                     isVideo
                       ? onSettingsChange({ videoAspectRatio: value })
@@ -2319,7 +2346,7 @@ function PromptComposer({
                 <>
                   <Select
                     value={String(settings.duration)}
-                    disabled={busy || revisionMode}
+                    disabled={unavailable || revisionMode}
                     onValueChange={(value) =>
                       onSettingsChange({ duration: Number(value) })
                     }
@@ -2354,7 +2381,7 @@ function PromptComposer({
                   ) : (
                     <Select
                       value={settings.videoResolution}
-                      disabled={busy || revisionMode}
+                      disabled={unavailable || revisionMode}
                       onValueChange={(value) =>
                         onSettingsChange({
                           videoResolution:
@@ -2396,7 +2423,7 @@ function PromptComposer({
                       type="button"
                       size="sm"
                       variant="ghost"
-                      disabled={revisionMode}
+                      disabled={unavailable || revisionMode}
                       className="h-6 px-2 text-[10px] text-muted-foreground"
                       onClick={() =>
                         onSettingsChange({
@@ -2420,7 +2447,7 @@ function PromptComposer({
               ) : (
                 <Select
                   value={settings.quality}
-                  disabled={busy || revisionMode}
+                  disabled={unavailable || revisionMode}
                   onValueChange={(value) =>
                     onSettingsChange({
                       quality: value as ImageSettings["quality"],
@@ -2452,17 +2479,36 @@ function PromptComposer({
               )}
             </div>
             <div className="flex items-center gap-1.5">
+              {isVideo && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={disabled || unavailable || !hasPrompt}
+                  onClick={() => void enhancePrompt()}
+                  className="h-6 px-2 text-[10px] text-muted-foreground"
+                >
+                  {enhancing ? (
+                    <LoaderCircle className="animate-spin" />
+                  ) : (
+                    <Sparkles />
+                  )}
+                  Enhance Prompt
+                </Button>
+              )}
               <span className="hidden text-[10px] text-muted-foreground sm:inline">
                 Shift + Enter for newline
               </span>
               <Button
                 size="icon-sm"
-                disabled={disabled || busy || !hasPrompt}
+                disabled={disabled || unavailable || !hasPrompt}
                 onClick={() => void submit()}
                 className="rounded-lg"
               >
                 {busy ? <LoaderCircle className="animate-spin" /> : <ArrowUp />}
-                <span className="sr-only">Generate image</span>
+                <span className="sr-only">
+                  {isVideo ? "Generate video" : "Generate image"}
+                </span>
               </Button>
             </div>
           </div>

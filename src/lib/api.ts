@@ -317,6 +317,20 @@ export async function createGeneration(draft: GenerationDraft) {
   }
 }
 
+export async function enhanceVideoPrompt(
+  prompt: string,
+  model: VideoModel,
+  duration: number,
+  generateAudio: boolean
+) {
+  const data = await request<{ prompt: string }>("/api/prompts/video/enhance", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, model, duration, generateAudio }),
+  })
+  return data.prompt
+}
+
 export async function cancelGeneration(turnId: string) {
   const data = await request<{ turn: ServerTurn }>(
     `/api/generations/${turnId}/cancel`,

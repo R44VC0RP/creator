@@ -57,6 +57,7 @@ import {
   type OrderedInput,
 } from "./services/generations"
 import { generateConversationTitle } from "./services/titles"
+import { enhanceVideoPrompt } from "./services/video-prompts"
 
 type App = { Bindings: Env; Variables: AppVariables }
 const api = new Hono<App>().basePath("/api")
@@ -347,6 +348,29 @@ api.delete("/conversations/:id", async (c) => {
 })
 
 api.post("/generations", async (c) => createGenerationFromRequest(c))
+
+api.post("/prompts/video/enhance", async (c) => {
+  const body = await c.req.json<{
+    prompt?: string
+    model?: string
+    duration?: number
+    generateAudio?: boolean
+  }>()
+  const prompt = cleanPrompt(body.prompt ?? null)
+  const model = parseVideoModel(body.model ?? null)
+  const duration = parseVideoDuration(
+    Number.isInteger(body.duration) ? String(body.duration) : null
+  )
+  const generateAudio =
+    model === GROK_VIDEO_MODEL || body.generateAudio !== false
+  const enhancedPrompt = await enhanceVideoPrompt(c.env, {
+    prompt,
+    model,
+    duration,
+    generateAudio,
+  })
+  return c.json({ prompt: enhancedPrompt })
+})
 
 api.get("/generations/:id", async (c) => {
   let turn = await findTurn(c.env, c.req.param("id"))
@@ -804,7 +828,7 @@ async function createGenerationFromRequest(c: Context<App>) {
     mode === "video"
       ? parseVideoModel(data.get("model"))
       : parseImageModel(data.get("model"))
-  const aspectRatio =
+  let aspectRatio =
     mode === "video" && model === KLING_VIDEO_MODEL
       ? "adaptive"
       : mode === "video"
@@ -957,6 +981,9 @@ async function createGenerationFromRequest(c: Context<App>) {
         "PARENT_NOT_IN_CONVERSATION",
         "The selected image is not in this conversation."
       )
+    }
+    if (model === KLING_VIDEO_MODEL) {
+      aspectRatio = parent.aspect_ratio
     }
     inputs.push({ assetId: parent.output_asset_id, role: "edit_base" })
   } else if (suppliedConversationId) {
@@ -1233,6 +1260,14 @@ async function publicGalleryItem(env: Env, asset: GalleryAssetRow) {
     .first()
   const posterAssetId =
     asset.mime_type === "video/mp4" ? asset.source_asset_id : asset.id
+  const sourceTurn =
+    asset.model === KLING_VIDEO_MODEL && asset.source_asset_id
+      ? await env.DB.prepare(
+          "SELECT aspect_ratio FROM turns WHERE output_asset_id = ? LIMIT 1"
+        )
+          .bind(asset.source_asset_id)
+          .first<{ aspect_ratio: string }>()
+      : null
   return {
     assetId: asset.id,
     turnId: asset.turn_id,
@@ -1242,7 +1277,7 @@ async function publicGalleryItem(env: Env, asset: GalleryAssetRow) {
     prompt: asset.authored_prompt,
     model: asset.model,
     mode: asset.generation_mode,
-    aspectRatio: asset.aspect_ratio,
+    aspectRatio: sourceTurn?.aspect_ratio ?? asset.aspect_ratio,
     quality: asset.model === DEFAULT_IMAGE_MODEL ? asset.quality : null,
     resolution: asset.model === GROK_IMAGE_MODEL ? asset.resolution : null,
     videoResolution: asset.delivery_resolution ?? asset.video_resolution,
@@ -1268,16 +1303,21 @@ function publicPerson(person: PersonRow) {
 
 async function publicTurn(env: Env, turn: TurnRow) {
   let posterAssetId = turn.output_asset_id
+  let aspectRatio = turn.aspect_ratio
   if (turn.generation_mode === "video") {
     const source = await env.DB.prepare(
-      "SELECT asset_id FROM turn_inputs WHERE turn_id = ? AND role = 'edit_base' ORDER BY ordinal LIMIT 1"
+      "SELECT turn_inputs.asset_id, source_turn.aspect_ratio FROM turn_inputs LEFT JOIN turns AS source_turn ON source_turn.output_asset_id = turn_inputs.asset_id WHERE turn_inputs.turn_id = ? AND turn_inputs.role = 'edit_base' ORDER BY turn_inputs.ordinal LIMIT 1"
     )
       .bind(turn.id)
-      .first<{ asset_id: string }>()
+      .first<{ asset_id: string; aspect_ratio: string | null }>()
     posterAssetId = source?.asset_id ?? null
+    if (turn.model === KLING_VIDEO_MODEL && source?.aspect_ratio) {
+      aspectRatio = source.aspect_ratio
+    }
   }
   return {
     ...turn,
+    aspect_ratio: aspectRatio,
     quality: turn.model === DEFAULT_IMAGE_MODEL ? turn.quality : null,
     resolution: turn.model === GROK_IMAGE_MODEL ? turn.resolution : null,
     video_resolution: turn.delivery_resolution ?? turn.video_resolution,
